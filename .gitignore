@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Keep the bundled baseline, ignore other generated experiment folders.
+TSP/POMO/result/*
+!TSP/POMO/result/saved_tsp100_model2_longTrain/
+!TSP/POMO/result/saved_tsp100_model2_longTrain/checkpoint-3000.pt
+TSP/POMO/result_lib/
+
+NEW_py_ver/TSP/data/tsplib/*
+NEW_py_ver/TSP/POMO/result_lib/*
+NEW_py_ver/TSP/data/*

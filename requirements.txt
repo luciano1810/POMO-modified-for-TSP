@@ -1,0 +1,6 @@
+# Install a PyTorch build that matches your CUDA runtime if you want GPU training:
+# https://pytorch.org/get-started/locally/
+torch
+numpy
+matplotlib
+pytz
