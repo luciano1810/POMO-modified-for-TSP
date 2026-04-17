@@ -43,6 +43,40 @@ def kmeans_batch(coords, num_clusters, num_iters=10):
     return cluster_ids, centroids
 
 
+def boundary_augment(cluster_ids, coords, centroids, boundary_ratio=0.85, swap_prob=0.5):
+    """
+    Training augmentation: randomly re-assign boundary nodes to a neighbouring cluster.
+
+    A node is considered a boundary node when its distance to the nearest centroid
+    is at least `boundary_ratio` of its distance to the second-nearest centroid
+    (i.e. it sits close to the dividing line between two clusters).
+    Each such node is swapped to its second-nearest cluster with probability `swap_prob`.
+
+    coords:         (batch, problem, 2)
+    centroids:      (batch, K, 2)
+    cluster_ids:    (batch, problem)  LongTensor
+    Returns:        augmented cluster_ids (batch, problem)
+    """
+    batch, problem = cluster_ids.shape
+    device = cluster_ids.device
+
+    dists = torch.cdist(coords, centroids)          # (batch, problem, K)
+    sorted_dists, sorted_idx = dists.sort(dim=2)
+
+    nearest_dist  = sorted_dists[:, :, 0]           # (batch, problem)
+    second_dist   = sorted_dists[:, :, 1]           # (batch, problem)
+    second_cluster = sorted_idx[:, :, 1]            # (batch, problem)
+
+    # High ratio → node is close to the cluster boundary
+    ratio = nearest_dist / second_dist.clamp(min=1e-8)
+    is_boundary = ratio > boundary_ratio
+
+    swap_mask = torch.rand(batch, problem, device=device) < swap_prob
+    augment_mask = is_boundary & swap_mask
+
+    return torch.where(augment_mask, second_cluster, cluster_ids)
+
+
 ########################################
 # MAIN MODEL
 ########################################
@@ -71,7 +105,12 @@ class TSPModel(nn.Module):
         # num_clusters scales with sqrt(problem_size): ~sqrt(n) nodes per cluster
         problem_size = problems.size(1)
         num_clusters = max(2, int(problem_size ** 0.5))
-        cluster_ids, _ = kmeans_batch(problems, num_clusters)
+        cluster_ids, centroids = kmeans_batch(problems, num_clusters)
+
+        # Boundary augmentation: only during training
+        if self.training:
+            cluster_ids = boundary_augment(cluster_ids, problems, centroids)
+
         _, self.g_node = self.cluster_encoder(self.encoded_nodes, cluster_ids, num_clusters)
         # g_node: (batch, problem, embedding_dim)
 
