@@ -58,6 +58,7 @@ MODEL_PARAMS = {
     "logit_clipping": 10,
     "ff_hidden_dim": 512,
     "eval_type": "argmax",
+    "num_clusters": 10,
 }
 
 
