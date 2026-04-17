@@ -68,9 +68,11 @@ class TSPModel(nn.Module):
         self.encoded_nodes = self.encoder(problems)          # (batch, problem, embedding_dim)
 
         # Cluster nodes and build per-node cluster embeddings
-        num_clusters = self.model_params['num_clusters']
+        # num_clusters scales with sqrt(problem_size): ~sqrt(n) nodes per cluster
+        problem_size = problems.size(1)
+        num_clusters = max(2, int(problem_size ** 0.5))
         cluster_ids, _ = kmeans_batch(problems, num_clusters)
-        _, self.g_node = self.cluster_encoder(self.encoded_nodes, cluster_ids)
+        _, self.g_node = self.cluster_encoder(self.encoded_nodes, cluster_ids, num_clusters)
         # g_node: (batch, problem, embedding_dim)
 
         self.h_global = self.encoded_nodes.mean(dim=1, keepdim=True)
@@ -165,15 +167,14 @@ class ClusterEncoder(nn.Module):
     """
     def __init__(self, **model_params):
         super().__init__()
-        embedding_dim    = model_params['embedding_dim']
-        self.num_clusters = model_params['num_clusters']
+        embedding_dim = model_params['embedding_dim']
         self.proj = nn.Linear(embedding_dim, embedding_dim)
 
-    def forward(self, encoded_nodes, cluster_ids):
+    def forward(self, encoded_nodes, cluster_ids, num_clusters):
         # encoded_nodes: (batch, problem, embedding)
         # cluster_ids:   (batch, problem)  LongTensor
+        # num_clusters:  int, computed dynamically from problem size
         batch, problem, embedding = encoded_nodes.shape
-        num_clusters = self.num_clusters
         device = encoded_nodes.device
 
         idx_exp = cluster_ids.unsqueeze(-1).expand(batch, problem, embedding)
