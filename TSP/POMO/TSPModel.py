@@ -5,76 +5,45 @@ import torch.nn.functional as F
 
 
 ########################################
-# K-MEANS CLUSTERING (BATCHED)
+# SOFT K-MEANS CLUSTERING (EMBEDDING SPACE)
 ########################################
 
-def kmeans_batch(coords, num_clusters, num_iters=10):
+def soft_kmeans_batch(embeddings, num_clusters, num_iters=5, temperature=1.0):
     """
-    Batched k-means on 2D node coordinates.
-    coords:  (batch, problem, 2)
-    Returns: cluster_ids (batch, problem) LongTensor
-             centroids  (batch, num_clusters, 2)
-    """
-    batch, problem, dim = coords.shape
-    device = coords.device
+    Differentiable soft k-means on node embeddings.
 
-    # Initialise centroids by picking random distinct nodes
+    Clusters in the encoder's embedding space (richer than raw coordinates).
+    Soft assignments naturally handle boundary nodes — no hard cluster borders.
+    Gradients flow back through the final assignment step to the encoder.
+
+    embeddings:  (batch, problem, dim)
+    Returns:
+        assignments: (batch, problem, K)  soft cluster weights, sum-to-1 over K
+        centroids:   (batch, K, dim)
+    """
+    batch, problem, dim = embeddings.shape
+    device = embeddings.device
+
+    # Initialise centroids from randomly selected node embeddings
     perm_idx = torch.randperm(problem, device=device)[:num_clusters]
-    centroids = coords[:, perm_idx, :].clone()          # (batch, K, 2)
+    centroids = embeddings[:, perm_idx, :].detach().clone()  # (batch, K, dim)
 
-    cluster_ids = torch.zeros(batch, problem, dtype=torch.long, device=device)
+    # Iterative EM — centroids are treated as non-differentiable during updates
+    # to stabilise training (similar to stop-gradient in VQ-VAE)
+    for _ in range(num_iters - 1):
+        dists = torch.cdist(embeddings.detach(), centroids)      # (batch, problem, K)
+        assignments = F.softmax(-dists / temperature, dim=2)     # (batch, problem, K)
 
-    for _ in range(num_iters):
-        # Assignment: nearest centroid
-        dists = torch.cdist(coords, centroids)           # (batch, problem, K)
-        cluster_ids = dists.argmin(dim=2)               # (batch, problem)
+        # Weighted mean update
+        weights = assignments.transpose(1, 2)                    # (batch, K, problem)
+        centroids = torch.bmm(weights, embeddings.detach())      # (batch, K, dim)
+        centroids = centroids / weights.sum(dim=2, keepdim=True).clamp(min=1e-8)
 
-        # Update: mean of assigned nodes via scatter_add
-        idx_exp = cluster_ids.unsqueeze(-1).expand(batch, problem, dim)
-        new_centroids = torch.zeros(batch, num_clusters, dim, device=device)
-        new_centroids.scatter_add_(1, idx_exp, coords)
-        counts = torch.zeros(batch, num_clusters, 1, device=device)
-        counts.scatter_add_(
-            1, cluster_ids.unsqueeze(-1),
-            torch.ones(batch, problem, 1, device=device)
-        )
-        centroids = new_centroids / counts.clamp(min=1)
+    # Final assignment with gradients enabled so encoder can learn cluster-friendly reprs
+    dists = torch.cdist(embeddings, centroids)
+    assignments = F.softmax(-dists / temperature, dim=2)         # (batch, problem, K)
 
-    return cluster_ids, centroids
-
-
-def boundary_augment(cluster_ids, coords, centroids, boundary_ratio=0.85, swap_prob=0.5):
-    """
-    Training augmentation: randomly re-assign boundary nodes to a neighbouring cluster.
-
-    A node is considered a boundary node when its distance to the nearest centroid
-    is at least `boundary_ratio` of its distance to the second-nearest centroid
-    (i.e. it sits close to the dividing line between two clusters).
-    Each such node is swapped to its second-nearest cluster with probability `swap_prob`.
-
-    coords:         (batch, problem, 2)
-    centroids:      (batch, K, 2)
-    cluster_ids:    (batch, problem)  LongTensor
-    Returns:        augmented cluster_ids (batch, problem)
-    """
-    batch, problem = cluster_ids.shape
-    device = cluster_ids.device
-
-    dists = torch.cdist(coords, centroids)          # (batch, problem, K)
-    sorted_dists, sorted_idx = dists.sort(dim=2)
-
-    nearest_dist  = sorted_dists[:, :, 0]           # (batch, problem)
-    second_dist   = sorted_dists[:, :, 1]           # (batch, problem)
-    second_cluster = sorted_idx[:, :, 1]            # (batch, problem)
-
-    # High ratio → node is close to the cluster boundary
-    ratio = nearest_dist / second_dist.clamp(min=1e-8)
-    is_boundary = ratio > boundary_ratio
-
-    swap_mask = torch.rand(batch, problem, device=device) < swap_prob
-    augment_mask = is_boundary & swap_mask
-
-    return torch.where(augment_mask, second_cluster, cluster_ids)
+    return assignments, centroids
 
 
 ########################################
@@ -101,17 +70,12 @@ class TSPModel(nn.Module):
         problems = reset_state.problems                      # (batch, problem, 2)
         self.encoded_nodes = self.encoder(problems)          # (batch, problem, embedding_dim)
 
-        # Cluster nodes and build per-node cluster embeddings
+        # Soft clustering in embedding space
         # num_clusters scales with sqrt(problem_size): ~sqrt(n) nodes per cluster
         problem_size = problems.size(1)
         num_clusters = max(2, int(problem_size ** 0.5))
-        cluster_ids, centroids = kmeans_batch(problems, num_clusters)
-
-        # Boundary augmentation: only during training
-        if self.training:
-            cluster_ids = boundary_augment(cluster_ids, problems, centroids)
-
-        _, self.g_node = self.cluster_encoder(self.encoded_nodes, cluster_ids, num_clusters)
+        assignments, _ = soft_kmeans_batch(self.encoded_nodes, num_clusters)
+        _, self.g_node = self.cluster_encoder(self.encoded_nodes, assignments)
         # g_node: (batch, problem, embedding_dim)
 
         self.h_global = self.encoded_nodes.mean(dim=1, keepdim=True)
@@ -209,29 +173,21 @@ class ClusterEncoder(nn.Module):
         embedding_dim = model_params['embedding_dim']
         self.proj = nn.Linear(embedding_dim, embedding_dim)
 
-    def forward(self, encoded_nodes, cluster_ids, num_clusters):
+    def forward(self, encoded_nodes, assignments):
         # encoded_nodes: (batch, problem, embedding)
-        # cluster_ids:   (batch, problem)  LongTensor
-        # num_clusters:  int, computed dynamically from problem size
+        # assignments:   (batch, problem, K)  soft cluster weights from soft_kmeans_batch
         batch, problem, embedding = encoded_nodes.shape
-        device = encoded_nodes.device
 
-        idx_exp = cluster_ids.unsqueeze(-1).expand(batch, problem, embedding)
+        # Soft weighted mean per cluster: (batch, K, problem) × (batch, problem, embedding)
+        weights = assignments.transpose(1, 2)                        # (batch, K, problem)
+        cluster_embs = torch.bmm(weights, encoded_nodes)             # (batch, K, embedding)
+        cluster_embs = cluster_embs / weights.sum(dim=2, keepdim=True).clamp(min=1e-8)
 
-        # Mean-pool node embeddings per cluster
-        cluster_embs = torch.zeros(batch, num_clusters, embedding, device=device)
-        cluster_embs.scatter_add_(1, idx_exp, encoded_nodes)
-        counts = torch.zeros(batch, num_clusters, 1, device=device)
-        counts.scatter_add_(
-            1, cluster_ids.unsqueeze(-1),
-            torch.ones(batch, problem, 1, device=device)
-        )
-        cluster_embs = cluster_embs / counts.clamp(min=1)  # (batch, K, embedding)
+        cluster_embs = self.proj(cluster_embs)                       # (batch, K, embedding)
 
-        cluster_embs = self.proj(cluster_embs)              # (batch, K, embedding)
-
-        # Gather per-node cluster embedding: g_{c(i)}
-        g_node = cluster_embs.gather(1, idx_exp)            # (batch, problem, embedding)
+        # Per-node cluster embedding: soft weighted sum over clusters
+        # (batch, problem, K) × (batch, K, embedding) = (batch, problem, embedding)
+        g_node = torch.bmm(assignments, cluster_embs)                # (batch, problem, embedding)
 
         return cluster_embs, g_node
 
@@ -255,7 +211,7 @@ class ClusterConfidenceNetwork(nn.Module):
             nn.ReLU(),
             nn.Linear(embedding_dim, 1),
         )
-        self.lambda_conf = nn.Parameter(torch.ones(1))
+        self.lambda_conf = nn.Parameter(torch.full((1,), 0.1))
 
     def forward(self, h_nodes, g_node, h_global, step_t, problem_size):
         # h_nodes:  (batch, problem, embedding)
