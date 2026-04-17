@@ -4,6 +4,49 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+########################################
+# K-MEANS CLUSTERING (BATCHED)
+########################################
+
+def kmeans_batch(coords, num_clusters, num_iters=10):
+    """
+    Batched k-means on 2D node coordinates.
+    coords:  (batch, problem, 2)
+    Returns: cluster_ids (batch, problem) LongTensor
+             centroids  (batch, num_clusters, 2)
+    """
+    batch, problem, dim = coords.shape
+    device = coords.device
+
+    # Initialise centroids by picking random distinct nodes
+    perm_idx = torch.randperm(problem, device=device)[:num_clusters]
+    centroids = coords[:, perm_idx, :].clone()          # (batch, K, 2)
+
+    cluster_ids = torch.zeros(batch, problem, dtype=torch.long, device=device)
+
+    for _ in range(num_iters):
+        # Assignment: nearest centroid
+        dists = torch.cdist(coords, centroids)           # (batch, problem, K)
+        cluster_ids = dists.argmin(dim=2)               # (batch, problem)
+
+        # Update: mean of assigned nodes via scatter_add
+        idx_exp = cluster_ids.unsqueeze(-1).expand(batch, problem, dim)
+        new_centroids = torch.zeros(batch, num_clusters, dim, device=device)
+        new_centroids.scatter_add_(1, idx_exp, coords)
+        counts = torch.zeros(batch, num_clusters, 1, device=device)
+        counts.scatter_add_(
+            1, cluster_ids.unsqueeze(-1),
+            torch.ones(batch, problem, 1, device=device)
+        )
+        centroids = new_centroids / counts.clamp(min=1)
+
+    return cluster_ids, centroids
+
+
+########################################
+# MAIN MODEL
+########################################
+
 class TSPModel(nn.Module):
 
     def __init__(self, **model_params):
@@ -12,19 +55,36 @@ class TSPModel(nn.Module):
 
         self.encoder = TSP_Encoder(**model_params)
         self.decoder = TSP_Decoder(**model_params)
-        self.encoded_nodes = None
-        # shape: (batch, problem, EMBEDDING_DIM)
+        self.cluster_encoder = ClusterEncoder(**model_params)
+        self.confidence_net = ClusterConfidenceNetwork(**model_params)
+
+        self.encoded_nodes = None   # (batch, problem, embedding_dim)
+        self.g_node = None          # (batch, problem, embedding_dim)
+        self.h_global = None        # (batch, 1, embedding_dim)
+        self.step_t = 0             # decoding step counter
 
     def pre_forward(self, reset_state):
-        self.encoded_nodes = self.encoder(reset_state.problems)
-        # shape: (batch, problem, EMBEDDING_DIM)
+        problems = reset_state.problems                      # (batch, problem, 2)
+        self.encoded_nodes = self.encoder(problems)          # (batch, problem, embedding_dim)
+
+        # Cluster nodes and build per-node cluster embeddings
+        num_clusters = self.model_params['num_clusters']
+        cluster_ids, _ = kmeans_batch(problems, num_clusters)
+        _, self.g_node = self.cluster_encoder(self.encoded_nodes, cluster_ids)
+        # g_node: (batch, problem, embedding_dim)
+
+        self.h_global = self.encoded_nodes.mean(dim=1, keepdim=True)
+        # (batch, 1, embedding_dim)
+
+        self.step_t = 0
         self.decoder.set_kv(self.encoded_nodes)
 
     def forward(self, state):
         batch_size = state.BATCH_IDX.size(0)
-        pomo_size = state.BATCH_IDX.size(1)
+        pomo_size  = state.BATCH_IDX.size(1)
 
         if state.current_node is None:
+            # First step: each POMO rollout starts from its own initial node
             selected = torch.arange(pomo_size)[None, :].expand(batch_size, pomo_size)
             prob = torch.ones(size=(batch_size, pomo_size))
 
@@ -33,10 +93,28 @@ class TSPModel(nn.Module):
             self.decoder.set_q1(encoded_first_node)
 
         else:
+            problem_size = self.encoded_nodes.size(1)
+
+            # Compute per-node cluster confidence scores
+            r_i = self.confidence_net(
+                self.encoded_nodes,   # h_i
+                self.g_node,          # g_{c(i)}
+                self.h_global,        # h_global
+                self.step_t,
+                problem_size,
+            )
+            # r_i shape: (batch, problem)
+
             encoded_last_node = _get_encoding(self.encoded_nodes, state.current_node)
             # shape: (batch, pomo, embedding)
-            probs = self.decoder(encoded_last_node, ninf_mask=state.ninf_mask)
+            probs = self.decoder(
+                encoded_last_node,
+                ninf_mask=state.ninf_mask,
+                cluster_confidence=r_i,
+            )
             # shape: (batch, pomo, problem)
+
+            self.step_t += 1
 
             if self.training or self.model_params['eval_type'] == 'softmax':
                 while True:
@@ -56,7 +134,6 @@ class TSPModel(nn.Module):
                 # shape: (batch, pomo)
                 prob = None
 
-
         return selected, prob
 
 
@@ -64,8 +141,8 @@ def _get_encoding(encoded_nodes, node_index_to_pick):
     # encoded_nodes.shape: (batch, problem, embedding)
     # node_index_to_pick.shape: (batch, pomo)
 
-    batch_size = node_index_to_pick.size(0)
-    pomo_size = node_index_to_pick.size(1)
+    batch_size    = node_index_to_pick.size(0)
+    pomo_size     = node_index_to_pick.size(1)
     embedding_dim = encoded_nodes.size(2)
 
     gathering_index = node_index_to_pick[:, :, None].expand(batch_size, pomo_size, embedding_dim)
@@ -78,6 +155,87 @@ def _get_encoding(encoded_nodes, node_index_to_pick):
 
 
 ########################################
+# CLUSTER ENCODER
+########################################
+
+class ClusterEncoder(nn.Module):
+    """
+    Aggregates node embeddings by cluster (mean pooling) and projects them.
+    Returns both cluster-level and per-node cluster embeddings.
+    """
+    def __init__(self, **model_params):
+        super().__init__()
+        embedding_dim    = model_params['embedding_dim']
+        self.num_clusters = model_params['num_clusters']
+        self.proj = nn.Linear(embedding_dim, embedding_dim)
+
+    def forward(self, encoded_nodes, cluster_ids):
+        # encoded_nodes: (batch, problem, embedding)
+        # cluster_ids:   (batch, problem)  LongTensor
+        batch, problem, embedding = encoded_nodes.shape
+        num_clusters = self.num_clusters
+        device = encoded_nodes.device
+
+        idx_exp = cluster_ids.unsqueeze(-1).expand(batch, problem, embedding)
+
+        # Mean-pool node embeddings per cluster
+        cluster_embs = torch.zeros(batch, num_clusters, embedding, device=device)
+        cluster_embs.scatter_add_(1, idx_exp, encoded_nodes)
+        counts = torch.zeros(batch, num_clusters, 1, device=device)
+        counts.scatter_add_(
+            1, cluster_ids.unsqueeze(-1),
+            torch.ones(batch, problem, 1, device=device)
+        )
+        cluster_embs = cluster_embs / counts.clamp(min=1)  # (batch, K, embedding)
+
+        cluster_embs = self.proj(cluster_embs)              # (batch, K, embedding)
+
+        # Gather per-node cluster embedding: g_{c(i)}
+        g_node = cluster_embs.gather(1, idx_exp)            # (batch, problem, embedding)
+
+        return cluster_embs, g_node
+
+
+########################################
+# CLUSTER CONFIDENCE NETWORK
+########################################
+
+class ClusterConfidenceNetwork(nn.Module):
+    """
+    r_i = f(h_i, g_{c(i)}, h_global, d_t)
+    Outputs a scalar confidence per node; scaled by learnable lambda.
+    """
+    def __init__(self, **model_params):
+        super().__init__()
+        embedding_dim = model_params['embedding_dim']
+        # Concatenate: h_i | g_{c(i)} | h_global | d_t
+        input_dim = 3 * embedding_dim + 1
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, embedding_dim),
+            nn.ReLU(),
+            nn.Linear(embedding_dim, 1),
+        )
+        self.lambda_conf = nn.Parameter(torch.ones(1))
+
+    def forward(self, h_nodes, g_node, h_global, step_t, problem_size):
+        # h_nodes:  (batch, problem, embedding)
+        # g_node:   (batch, problem, embedding)
+        # h_global: (batch, 1, embedding)
+        batch, problem, embedding = h_nodes.shape
+
+        h_global_exp = h_global.expand(batch, problem, embedding)
+        d_t = torch.full(
+            (batch, problem, 1), step_t / problem_size, device=h_nodes.device
+        )
+
+        x = torch.cat([h_nodes, g_node, h_global_exp, d_t], dim=-1)
+        # shape: (batch, problem, 3*embedding+1)
+
+        r = self.net(x).squeeze(-1)           # (batch, problem)
+        return self.lambda_conf * r
+
+
+########################################
 # ENCODER
 ########################################
 
@@ -85,7 +243,7 @@ class TSP_Encoder(nn.Module):
     def __init__(self, **model_params):
         super().__init__()
         self.model_params = model_params
-        embedding_dim = self.model_params['embedding_dim']
+        embedding_dim    = self.model_params['embedding_dim']
         encoder_layer_num = self.model_params['encoder_layer_num']
 
         self.embedding = nn.Linear(2, embedding_dim)
@@ -109,8 +267,8 @@ class EncoderLayer(nn.Module):
         super().__init__()
         self.model_params = model_params
         embedding_dim = self.model_params['embedding_dim']
-        head_num = self.model_params['head_num']
-        qkv_dim = self.model_params['qkv_dim']
+        head_num      = self.model_params['head_num']
+        qkv_dim       = self.model_params['qkv_dim']
 
         self.Wq = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
         self.Wk = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
@@ -118,17 +276,17 @@ class EncoderLayer(nn.Module):
         self.multi_head_combine = nn.Linear(head_num * qkv_dim, embedding_dim)
 
         self.addAndNormalization1 = Add_And_Normalization_Module(**model_params)
-        self.feedForward = Feed_Forward_Module(**model_params)
+        self.feedForward          = Feed_Forward_Module(**model_params)
         self.addAndNormalization2 = Add_And_Normalization_Module(**model_params)
 
     def forward(self, input1):
-        # input.shape: (batch, problem, EMBEDDING_DIM)
+        # input1.shape: (batch, problem, EMBEDDING_DIM)
         head_num = self.model_params['head_num']
 
         q = reshape_by_heads(self.Wq(input1), head_num=head_num)
         k = reshape_by_heads(self.Wk(input1), head_num=head_num)
         v = reshape_by_heads(self.Wv(input1), head_num=head_num)
-        # q shape: (batch, HEAD_NUM, problem, KEY_DIM)
+        # shape: (batch, HEAD_NUM, problem, KEY_DIM)
 
         out_concat = multi_head_attention(q, k, v)
         # shape: (batch, problem, HEAD_NUM*KEY_DIM)
@@ -153,20 +311,20 @@ class TSP_Decoder(nn.Module):
         super().__init__()
         self.model_params = model_params
         embedding_dim = self.model_params['embedding_dim']
-        head_num = self.model_params['head_num']
-        qkv_dim = self.model_params['qkv_dim']
+        head_num      = self.model_params['head_num']
+        qkv_dim       = self.model_params['qkv_dim']
 
         self.Wq_first = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
-        self.Wq_last = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
-        self.Wk = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
-        self.Wv = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
+        self.Wq_last  = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
+        self.Wk       = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
+        self.Wv       = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
 
         self.multi_head_combine = nn.Linear(head_num * qkv_dim, embedding_dim)
 
-        self.k = None  # saved key, for multi-head attention
-        self.v = None  # saved value, for multi-head_attention
-        self.single_head_key = None  # saved, for single-head attention
-        self.q_first = None  # saved q1, for multi-head attention
+        self.k              = None  # saved key,  multi-head attention
+        self.v              = None  # saved value, multi-head attention
+        self.single_head_key = None  # saved, single-head attention
+        self.q_first        = None  # saved q_first, multi-head attention
 
     def set_kv(self, encoded_nodes):
         # encoded_nodes.shape: (batch, problem, embedding)
@@ -174,20 +332,21 @@ class TSP_Decoder(nn.Module):
 
         self.k = reshape_by_heads(self.Wk(encoded_nodes), head_num=head_num)
         self.v = reshape_by_heads(self.Wv(encoded_nodes), head_num=head_num)
-        # shape: (batch, head_num, pomo, qkv_dim)
+        # shape: (batch, head_num, problem, qkv_dim)
         self.single_head_key = encoded_nodes.transpose(1, 2)
         # shape: (batch, embedding, problem)
 
     def set_q1(self, encoded_q1):
-        # encoded_q.shape: (batch, n, embedding)  # n can be 1 or pomo
+        # encoded_q1.shape: (batch, n, embedding)
         head_num = self.model_params['head_num']
 
         self.q_first = reshape_by_heads(self.Wq_first(encoded_q1), head_num=head_num)
         # shape: (batch, head_num, n, qkv_dim)
 
-    def forward(self, encoded_last_node, ninf_mask):
+    def forward(self, encoded_last_node, ninf_mask, cluster_confidence=None):
         # encoded_last_node.shape: (batch, pomo, embedding)
-        # ninf_mask.shape: (batch, pomo, problem)
+        # ninf_mask.shape:         (batch, pomo, problem)
+        # cluster_confidence:      (batch, problem)  or None
 
         head_num = self.model_params['head_num']
 
@@ -211,12 +370,15 @@ class TSP_Decoder(nn.Module):
         # shape: (batch, pomo, problem)
 
         sqrt_embedding_dim = self.model_params['sqrt_embedding_dim']
-        logit_clipping = self.model_params['logit_clipping']
+        logit_clipping     = self.model_params['logit_clipping']
 
-        score_scaled = score / sqrt_embedding_dim
-        # shape: (batch, pomo, problem)
-
+        score_scaled  = score / sqrt_embedding_dim
         score_clipped = logit_clipping * torch.tanh(score_scaled)
+
+        # Add cluster confidence: u'_i = u_i + λ * r_i
+        if cluster_confidence is not None:
+            score_clipped = score_clipped + cluster_confidence.unsqueeze(1)
+            # cluster_confidence (batch, problem) broadcast over pomo dim
 
         score_masked = score_clipped + ninf_mask
 
@@ -231,14 +393,12 @@ class TSP_Decoder(nn.Module):
 ########################################
 
 def reshape_by_heads(qkv, head_num):
-    # q.shape: (batch, n, head_num*key_dim)   : n can be either 1 or PROBLEM_SIZE
+    # q.shape: (batch, n, head_num*key_dim)
 
     batch_s = qkv.size(0)
     n = qkv.size(1)
 
-    q_reshaped = qkv.reshape(batch_s, n, head_num, -1)
-    # shape: (batch, n, head_num, key_dim)
-
+    q_reshaped   = qkv.reshape(batch_s, n, head_num, -1)
     q_transposed = q_reshaped.transpose(1, 2)
     # shape: (batch, head_num, n, key_dim)
 
@@ -246,17 +406,16 @@ def reshape_by_heads(qkv, head_num):
 
 
 def multi_head_attention(q, k, v, rank2_ninf_mask=None, rank3_ninf_mask=None):
-    # q shape: (batch, head_num, n, key_dim)   : n can be either 1 or PROBLEM_SIZE
+    # q shape: (batch, head_num, n, key_dim)
     # k,v shape: (batch, head_num, problem, key_dim)
     # rank2_ninf_mask.shape: (batch, problem)
     # rank3_ninf_mask.shape: (batch, group, problem)
 
-    batch_s = q.size(0)
+    batch_s  = q.size(0)
     head_num = q.size(1)
-    n = q.size(2)
-    key_dim = q.size(3)
-
-    input_s = k.size(2)
+    n        = q.size(2)
+    key_dim  = q.size(3)
+    input_s  = k.size(2)
 
     score = torch.matmul(q, k.transpose(2, 3))
     # shape: (batch, head_num, n, problem)
@@ -291,17 +450,10 @@ class Add_And_Normalization_Module(nn.Module):
     def forward(self, input1, input2):
         # input.shape: (batch, problem, embedding)
 
-        added = input1 + input2
-        # shape: (batch, problem, embedding)
-
+        added     = input1 + input2
         transposed = added.transpose(1, 2)
-        # shape: (batch, embedding, problem)
-
         normalized = self.norm(transposed)
-        # shape: (batch, embedding, problem)
-
         back_trans = normalized.transpose(1, 2)
-        # shape: (batch, problem, embedding)
 
         return back_trans
 
