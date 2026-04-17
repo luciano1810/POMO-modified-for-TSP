@@ -43,7 +43,6 @@ model_params = {
     'logit_clipping': 10,
     'ff_hidden_dim': 512,
     'eval_type': 'argmax',
-    'num_clusters': 10,   # k-means clusters for cluster confidence network
 }
 
 optimizer_params = {
