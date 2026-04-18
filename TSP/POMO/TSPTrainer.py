@@ -174,7 +174,10 @@ class TSPTrainer:
 
         # Loss
         ###############################################
-        advantage = reward - reward.float().mean(dim=1, keepdims=True)
+        # advantage = reward - reward.float().mean(dim=1, keepdims=True)
+        greedy_len = self._greedy_length(self.env.problems)          # (batch,)
+        advantage  = reward - (-greedy_len.unsqueeze(1))        # (batch, pomo) 
+
         # shape: (batch, pomo)
         log_prob = prob_list.log().sum(dim=2)
         # size = (batch, pomo)
@@ -193,3 +196,25 @@ class TSPTrainer:
         loss_mean.backward()
         self.optimizer.step()
         return score_mean.item(), loss_mean.item()
+    
+    def _greedy_length(self, problems):
+        batch, N, _ = problems.shape
+        device = problems.device
+
+        visited    = torch.zeros(batch, N, dtype=torch.bool, device=device)
+        current    = torch.zeros(batch, dtype=torch.long, device=device)
+        visited[:, 0] = True
+        total_dist = torch.zeros(batch, device=device)
+
+        for _ in range(N - 1):
+            cur_coord   = problems[torch.arange(batch), current]
+            dist_to_all = torch.cdist(cur_coord.unsqueeze(1), problems).squeeze(1)
+            dist_to_all[visited] = float('inf')
+            next_node   = dist_to_all.argmin(dim=1)
+            next_coord  = problems[torch.arange(batch), next_node]
+            total_dist += (next_coord - cur_coord).norm(dim=1)
+            visited.scatter_(1, next_node.unsqueeze(1), True)
+            current = next_node
+
+        total_dist += (problems[:, 0] - problems[torch.arange(batch), current]).norm(dim=1)
+        return total_dist

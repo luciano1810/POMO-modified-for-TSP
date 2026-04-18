@@ -11,6 +11,7 @@ CUDA_DEVICE_NUM = 0
 
 import os
 import sys
+import torch
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, "..")  # for problem_def
@@ -103,6 +104,23 @@ def main():
                       model_params=model_params,
                       optimizer_params=optimizer_params,
                       trainer_params=trainer_params)
+
+    
+    pretrained_path = '/home/syw/projects/SDM-5031-2026-Spring-modified/TSP/POMO/result/saved_tsp100_model2_longTrain/checkpoint-3000.pt'
+    pretrained = torch.load(pretrained_path, map_location='cuda')
+    pretrained_state = pretrained['model_state_dict']
+
+    model_state = trainer.model.state_dict()
+    loaded, skipped = [], []
+    for k, v in pretrained_state.items():
+        if k.startswith('encoder.') or k.startswith('decoder.'):
+            if k in model_state and model_state[k].shape == v.shape:
+                model_state[k] = v
+                loaded.append(k)
+            else:
+                skipped.append(k)
+    trainer.model.load_state_dict(model_state)
+    print(f'Warm start: loaded {len(loaded)} keys, skipped {len(skipped)} keys')
 
     copy_all_src(trainer.result_folder)
 
