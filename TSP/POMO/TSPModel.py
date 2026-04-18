@@ -198,20 +198,19 @@ class ClusterEncoder(nn.Module):
 
 class ClusterConfidenceNetwork(nn.Module):
     """
-    r_i = f(h_i, g_{c(i)}, h_global, d_t)
-    Outputs a scalar confidence per node; scaled by learnable lambda.
+    b_i^cluster = f(h_i, g_{c(i)}, h_global, d_t)
+    Outputs raw cluster bias per node (no internal lambda — gating is done
+    dynamically by GateNetwork inside the decoder).
     """
     def __init__(self, **model_params):
         super().__init__()
         embedding_dim = model_params['embedding_dim']
-        # Concatenate: h_i | g_{c(i)} | h_global | d_t
-        input_dim = 3 * embedding_dim + 1
+        input_dim = 3 * embedding_dim + 1   # h_i | g_{c(i)} | h_global | d_t
         self.net = nn.Sequential(
             nn.Linear(input_dim, embedding_dim),
             nn.ReLU(),
             nn.Linear(embedding_dim, 1),
         )
-        self.lambda_conf = nn.Parameter(torch.full((1,), 0.1))
 
     def forward(self, h_nodes, g_node, h_global, step_t, problem_size):
         # h_nodes:  (batch, problem, embedding)
@@ -225,10 +224,42 @@ class ClusterConfidenceNetwork(nn.Module):
         )
 
         x = torch.cat([h_nodes, g_node, h_global_exp, d_t], dim=-1)
-        # shape: (batch, problem, 3*embedding+1)
+        return self.net(x).squeeze(-1)       # (batch, problem)
 
-        r = self.net(x).squeeze(-1)           # (batch, problem)
-        return self.lambda_conf * r
+
+########################################
+# GATE NETWORK
+########################################
+
+class GateNetwork(nn.Module):
+    """
+    Dynamic gate:  λ_t = σ( g(h_t) )
+
+    h_t = mh_atten_out from the decoder at step t.
+    It already encodes: first node embedding, last selected node embedding,
+    and attention-weighted summary of all remaining nodes — a compact
+    representation of the partial tour state.
+
+    The gate is a scalar per (batch, pomo) rollout, so the model can learn
+    to rely on cluster bias in structured regions and ignore it elsewhere.
+    """
+    def __init__(self, **model_params):
+        super().__init__()
+        embedding_dim = model_params['embedding_dim']
+        self.net = nn.Sequential(
+            nn.Linear(embedding_dim, embedding_dim // 2),
+            nn.ReLU(),
+            nn.Linear(embedding_dim // 2, 1),
+        )
+        # Initialise output bias to -4 so σ(-4) ≈ 0.018 at the start of training.
+        # The model begins as near-vanilla POMO and only opens the gate when
+        # gradient evidence shows cluster bias is genuinely useful.
+        nn.init.constant_(self.net[-1].bias, -4.0)
+
+    def forward(self, mh_atten_out):
+        # mh_atten_out: (batch, pomo, embedding)
+        # returns:      (batch, pomo, 1)  in (0, 1)
+        return torch.sigmoid(self.net(mh_atten_out))
 
 
 ########################################
@@ -316,6 +347,7 @@ class TSP_Decoder(nn.Module):
         self.Wv       = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
 
         self.multi_head_combine = nn.Linear(head_num * qkv_dim, embedding_dim)
+        self.gate_net = GateNetwork(**model_params)
 
         self.k              = None  # saved key,  multi-head attention
         self.v              = None  # saved value, multi-head attention
@@ -371,10 +403,14 @@ class TSP_Decoder(nn.Module):
         score_scaled  = score / sqrt_embedding_dim
         score_clipped = logit_clipping * torch.tanh(score_scaled)
 
-        # Add cluster confidence: u'_i = u_i + λ * r_i
+        # Dynamic gated cluster bias: logit_i = logit_i^pomo + λ_t * b_i^cluster
+        # λ_t = σ(g(mh_atten_out)) — per-rollout gate in (0,1)
+        # When cluster bias is uninformative, the gate learns to close (→ 0),
+        # recovering vanilla POMO behaviour exactly.
         if cluster_confidence is not None:
-            score_clipped = score_clipped + cluster_confidence.unsqueeze(1)
-            # cluster_confidence (batch, problem) broadcast over pomo dim
+            lambda_t = self.gate_net(mh_atten_out)          # (batch, pomo, 1)
+            score_clipped = score_clipped + lambda_t * cluster_confidence.unsqueeze(1)
+            # cluster_confidence: (batch, problem) → (batch, 1, problem) broadcast
 
         score_masked = score_clipped + ninf_mask
 
