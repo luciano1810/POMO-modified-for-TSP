@@ -143,7 +143,7 @@ python train.py
 cd TSP/POMO
 python test.py \
   --data_path ../data/val \
-  --checkpoint_path /path/to/your/checkpoint.pt \
+  --checkpoint_path /home/shaoyw1810/桌面/Projects/SDM-5031-2026-Spring/TSP/POMO/result/20260417_183623_train__tsp_n100__3000epoch/checkpoint-400.pt \
   --augmentation_enable true \
   --aug_factor 8 \
   --output_json ./result_lib/your_eval.json
