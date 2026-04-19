@@ -174,9 +174,9 @@ class TSPTrainer:
 
         # Loss
         ###############################################
-        # advantage = reward - reward.float().mean(dim=1, keepdims=True)
-        greedy_len = self._greedy_length(self.env.problems)          # (batch,)
-        advantage  = reward - (-greedy_len.unsqueeze(1))        # (batch, pomo) 
+        advantage = reward - reward.float().mean(dim=1, keepdims=True)
+        # greedy_len = self._greedy_length(self.env.problems)          # (batch,)
+        # advantage  = reward - (-greedy_len.unsqueeze(1))        # (batch, pomo) 
 
         # shape: (batch, pomo)
         log_prob = prob_list.log().sum(dim=2)
