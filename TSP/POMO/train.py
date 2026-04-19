@@ -63,7 +63,7 @@ optimizer_params = {
 trainer_params = {
     'use_cuda': USE_CUDA,
     'cuda_device_num': CUDA_DEVICE_NUM,
-    'epochs': 4000,
+    'epochs': 650,
     'train_episodes': 100 * 1000,
     'train_batch_size': 64,
     'train_aug_factor': 8,
@@ -71,20 +71,20 @@ trainer_params = {
         'enable': True,
         'beta_start': 0.01,
         'beta_end': 0.0,
-        'anneal_epochs': 4000,
+        'anneal_epochs': 650,
     },
     'curriculum': {
         'enable': True,
         'stages': [
-            {'problem_size': 50, 'epochs': 1000, 'train_episodes': 100 * 1000, 'train_batch_size': 64},
-            {'problem_size': 100, 'epochs': 1000, 'train_episodes': 100 * 1000, 'train_batch_size': 64},
-            {'problem_size': 200, 'epochs': 1000, 'train_episodes': 100 * 1000, 'train_batch_size': 32},
-            {'problem_size': 300, 'epochs': 1000, 'train_episodes': 100 * 1000, 'train_batch_size': 16},
+            {'problem_size': 50, 'epochs': 50, 'train_episodes': 100 * 1000, 'train_batch_size': 64},
+            {'problem_size': 100, 'epochs': 100, 'train_episodes': 100 * 1000, 'train_batch_size': 64},
+            {'problem_size': 200, 'epochs': 200, 'train_episodes': 100 * 1000, 'train_batch_size': 32},
+            {'problem_size': 300, 'epochs': 300, 'train_episodes': 100 * 1000, 'train_batch_size': 16},
         ],
     },
     'logging': {
-        'model_save_interval': 100,
-        'img_save_interval': 100,
+        'model_save_interval': 50,
+        'img_save_interval': 50,
         'log_image_params_1': {
             'json_foldername': 'log_image_style',
             'filename': 'style_tsp_100.json'
@@ -104,7 +104,7 @@ trainer_params = {
 
 logger_params = {
     'log_file': {
-        'desc': 'train__tsp_curriculum_50_100_200_300',
+        'desc': 'train__tsp_curriculum_50e_100e_200e_300e',
         'filename': 'log.txt'
     }
 }
