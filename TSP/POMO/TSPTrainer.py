@@ -45,6 +45,10 @@ class TSPTrainer:
         self.env = Env(**self.env_params)
         self.optimizer = Optimizer(self.model.parameters(), **self.optimizer_params['optimizer'])
         self.scheduler = Scheduler(self.optimizer, **self.optimizer_params['scheduler'])
+        self.curriculum_stages = self._build_curriculum_stages()
+        self.current_curriculum_stage_idx = None
+        if self.curriculum_stages is not None:
+            self.trainer_params['epochs'] = self.curriculum_stages[-1]['end_epoch']
 
         # Restore
         self.start_epoch = 1
@@ -52,10 +56,17 @@ class TSPTrainer:
         if model_load['enable']:
             checkpoint_fullname = '{path}/checkpoint-{epoch}.pt'.format(**model_load)
             checkpoint = torch.load(checkpoint_fullname, map_location=device)
-            self.model.load_state_dict(checkpoint['model_state_dict'])
+            load_result = self.model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+            if load_result.missing_keys:
+                self.logger.info('Model load missing keys: {}'.format(load_result.missing_keys))
+            if load_result.unexpected_keys:
+                self.logger.info('Model load unexpected keys: {}'.format(load_result.unexpected_keys))
             self.start_epoch = 1 + model_load['epoch']
             self.result_log.set_raw_data(checkpoint['result_log'])
-            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            try:
+                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            except ValueError as e:
+                self.logger.info('Optimizer state was not loaded because model parameters changed: {}'.format(e))
             self.scheduler.last_epoch = model_load['epoch']-1
             self.logger.info('Saved Model Loaded !!')
 
@@ -66,6 +77,7 @@ class TSPTrainer:
         self.time_estimator.reset(self.start_epoch)
         for epoch in range(self.start_epoch, self.trainer_params['epochs']+1):
             self.logger.info('=================================================================')
+            self._set_curriculum_stage(epoch)
 
             # LR Decay
             self.scheduler.step()
@@ -117,20 +129,99 @@ class TSPTrainer:
                 self.logger.info("Now, printing log array...")
                 util_print_log_array(self.logger, self.result_log)
 
+    def _build_curriculum_stages(self):
+        curriculum = self.trainer_params.get('curriculum', {})
+        if not curriculum.get('enable', False):
+            return None
+
+        stages = []
+        start_epoch = 1
+        default_train_episodes = self.trainer_params['train_episodes']
+        default_train_batch_size = self.trainer_params['train_batch_size']
+        for idx, stage in enumerate(curriculum['stages']):
+            stage_epochs = stage['epochs']
+            end_epoch = start_epoch + stage_epochs - 1
+            problem_size = stage['problem_size']
+            stages.append({
+                'idx': idx,
+                'start_epoch': start_epoch,
+                'end_epoch': end_epoch,
+                'problem_size': problem_size,
+                'pomo_size': stage.get('pomo_size', problem_size),
+                'train_episodes': stage.get('train_episodes', default_train_episodes),
+                'train_batch_size': stage.get('train_batch_size', default_train_batch_size),
+            })
+            start_epoch = end_epoch + 1
+
+        return stages
+
+    def _set_curriculum_stage(self, epoch):
+        if self.curriculum_stages is None:
+            return
+
+        active_stage = None
+        for stage in self.curriculum_stages:
+            if stage['start_epoch'] <= epoch <= stage['end_epoch']:
+                active_stage = stage
+                break
+
+        if active_stage is None:
+            active_stage = self.curriculum_stages[-1]
+
+        if self.current_curriculum_stage_idx == active_stage['idx']:
+            return
+
+        self.current_curriculum_stage_idx = active_stage['idx']
+        self.env.problem_size = active_stage['problem_size']
+        self.env.pomo_size = active_stage['pomo_size']
+        self.env.env_params['problem_size'] = active_stage['problem_size']
+        self.env.env_params['pomo_size'] = active_stage['pomo_size']
+        self.trainer_params['active_train_episodes'] = active_stage['train_episodes']
+        self.trainer_params['active_train_batch_size'] = active_stage['train_batch_size']
+
+        self.logger.info(
+            'Curriculum stage {}: epoch {}-{}, TSP{}, POMO{}, train_episodes={}, train_batch_size={}'.format(
+                active_stage['idx'] + 1,
+                active_stage['start_epoch'],
+                active_stage['end_epoch'],
+                active_stage['problem_size'],
+                active_stage['pomo_size'],
+                active_stage['train_episodes'],
+                active_stage['train_batch_size'],
+            )
+        )
+
+    def _get_train_episodes(self):
+        return self.trainer_params.get('active_train_episodes', self.trainer_params['train_episodes'])
+
+    def _get_train_batch_size(self):
+        return self.trainer_params.get('active_train_batch_size', self.trainer_params['train_batch_size'])
+
+    def _get_entropy_beta(self, epoch):
+        entropy_params = self.trainer_params.get('entropy_bonus', {})
+        if not entropy_params.get('enable', False):
+            return 0.0
+
+        beta_start = entropy_params.get('beta_start', 0.01)
+        beta_end = entropy_params.get('beta_end', 0.0)
+        anneal_epochs = entropy_params.get('anneal_epochs', self.trainer_params['epochs'])
+        progress = min(max((epoch - 1) / max(1, anneal_epochs - 1), 0.0), 1.0)
+        return beta_start + (beta_end - beta_start) * progress
+
     def _train_one_epoch(self, epoch):
 
         score_AM = AverageMeter()
         loss_AM = AverageMeter()
 
-        train_num_episode = self.trainer_params['train_episodes']
+        train_num_episode = self._get_train_episodes()
         episode = 0
         loop_cnt = 0
         while episode < train_num_episode:
 
             remaining = train_num_episode - episode
-            batch_size = min(self.trainer_params['train_batch_size'], remaining)
+            batch_size = min(self._get_train_batch_size(), remaining)
 
-            avg_score, avg_loss = self._train_one_batch(batch_size)
+            avg_score, avg_loss = self._train_one_batch(batch_size, epoch)
             score_AM.update(avg_score, batch_size)
             loss_AM.update(avg_loss, batch_size)
 
@@ -151,16 +242,21 @@ class TSPTrainer:
 
         return score_AM.avg, loss_AM.avg
 
-    def _train_one_batch(self, batch_size):
+    def _train_one_batch(self, batch_size, epoch):
 
         # Prep
         ###############################################
         self.model.train()
-        self.env.load_problems(batch_size)
+        train_aug_factor = self.trainer_params.get('train_aug_factor', 1)
+        self.env.load_problems(batch_size, aug_factor=train_aug_factor)
+        effective_batch_size = self.env.batch_size
         reset_state, _, _ = self.env.reset()
         self.model.pre_forward(reset_state)
 
-        prob_list = torch.zeros(size=(batch_size, self.env.pomo_size, 0))
+        device = reset_state.problems.device
+        prob_list = torch.zeros(size=(effective_batch_size, self.env.pomo_size, 0), device=device)
+        # shape: (batch, pomo, 0~problem)
+        entropy_list = torch.zeros(size=(effective_batch_size, self.env.pomo_size, 0), device=device)
         # shape: (batch, pomo, 0~problem)
 
         # POMO Rollout
@@ -172,13 +268,28 @@ class TSPTrainer:
             state, reward, done = self.env.step(selected)
             prob_list = torch.cat((prob_list, prob[:, :, None]), dim=2)
 
+            if self.model.last_probs is None:
+                entropy = torch.zeros_like(prob)
+            else:
+                probs = self.model.last_probs.clamp_min(1e-12)
+                entropy = -(probs * probs.log()).sum(dim=2)
+            entropy_list = torch.cat((entropy_list, entropy[:, :, None]), dim=2)
+
         # Loss
         ###############################################
-        advantage = reward - reward.float().mean(dim=1, keepdims=True)
+        pomo_size = reward.size(1)
+        if pomo_size > 1:
+            leave_one_out_baseline = (reward.sum(dim=1, keepdim=True) - reward) / (pomo_size - 1)
+        else:
+            leave_one_out_baseline = reward.float().mean(dim=1, keepdims=True)
+        advantage = reward - leave_one_out_baseline
         # shape: (batch, pomo)
         log_prob = prob_list.log().sum(dim=2)
         # size = (batch, pomo)
-        loss = -advantage * log_prob  # Minus Sign: To Increase REWARD
+        trajectory_entropy = entropy_list.sum(dim=2)
+        entropy_beta = self._get_entropy_beta(epoch)
+        loss = -advantage * log_prob - entropy_beta * trajectory_entropy
+        # Minus Sign: To Increase REWARD and policy entropy
         # shape: (batch, pomo)
         loss_mean = loss.mean()
 

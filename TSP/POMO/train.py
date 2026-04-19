@@ -30,19 +30,23 @@ from TSPTrainer import TSPTrainer as Trainer
 # parameters
 
 env_params = {
-    'problem_size': 100,
-    'pomo_size': 100,
+    'problem_size': 50,
+    'pomo_size': 50,
 }
 
 model_params = {
     'embedding_dim': 128,
     'sqrt_embedding_dim': 128**(1/2),
-    'encoder_layer_num': 6,
+    'encoder_layer_num': 3,
+    'decoder_layer_num': 3,
     'qkv_dim': 16,
     'head_num': 8,
     'logit_clipping': 10,
     'ff_hidden_dim': 512,
     'eval_type': 'argmax',
+    'distance_bias': True,
+    'distance_bias_init': 1.0,
+    'eas_hidden_dim': 128,
 }
 
 optimizer_params = {
@@ -59,9 +63,25 @@ optimizer_params = {
 trainer_params = {
     'use_cuda': USE_CUDA,
     'cuda_device_num': CUDA_DEVICE_NUM,
-    'epochs': 3100,
+    'epochs': 4000,
     'train_episodes': 100 * 1000,
     'train_batch_size': 64,
+    'train_aug_factor': 8,
+    'entropy_bonus': {
+        'enable': True,
+        'beta_start': 0.01,
+        'beta_end': 0.0,
+        'anneal_epochs': 4000,
+    },
+    'curriculum': {
+        'enable': True,
+        'stages': [
+            {'problem_size': 50, 'epochs': 1000, 'train_episodes': 100 * 1000, 'train_batch_size': 64},
+            {'problem_size': 100, 'epochs': 1000, 'train_episodes': 100 * 1000, 'train_batch_size': 64},
+            {'problem_size': 200, 'epochs': 1000, 'train_episodes': 100 * 1000, 'train_batch_size': 32},
+            {'problem_size': 300, 'epochs': 1000, 'train_episodes': 100 * 1000, 'train_batch_size': 16},
+        ],
+    },
     'logging': {
         'model_save_interval': 100,
         'img_save_interval': 100,
@@ -84,7 +104,7 @@ trainer_params = {
 
 logger_params = {
     'log_file': {
-        'desc': 'train__tsp_n100__3000epoch',
+        'desc': 'train__tsp_curriculum_50_100_200_300',
         'filename': 'log.txt'
     }
 }
@@ -110,10 +130,16 @@ def main():
 
 
 def _set_debug_mode():
-    global trainer_params
+    global env_params, trainer_params
+    env_params['problem_size'] = 20
+    env_params['pomo_size'] = 20
     trainer_params['epochs'] = 2
     trainer_params['train_episodes'] = 10
     trainer_params['train_batch_size'] = 4
+    trainer_params['entropy_bonus']['anneal_epochs'] = 2
+    trainer_params['curriculum']['stages'] = [
+        {'problem_size': 20, 'epochs': 2, 'train_episodes': 10, 'train_batch_size': 4},
+    ]
 
 
 def _print_config():

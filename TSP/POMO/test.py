@@ -48,16 +48,27 @@ DEFAULT_MODEL_EPOCH = 3000
 DEFAULT_AUGMENTATION_ENABLE = True
 DEFAULT_AUG_FACTOR = 8
 DEFAULT_DETAILED_LOG = True
+DEFAULT_EAS_ENABLE = False
+DEFAULT_EAS_STEPS = 100
+DEFAULT_EAS_LR = 1e-3
+DEFAULT_SGBS_ENABLE = False
+DEFAULT_SGBS_BEAM_WIDTH = 4
+DEFAULT_SGBS_EXPAND_WIDTH = 4
+DEFAULT_SGBS_SIMULATION_ENABLE = True
 
 MODEL_PARAMS = {
     "embedding_dim": 128,
     "sqrt_embedding_dim": 128 ** (1 / 2),
-    "encoder_layer_num": 6,
+    "encoder_layer_num": 3,
+    "decoder_layer_num": 3,
     "qkv_dim": 16,
     "head_num": 8,
     "logit_clipping": 10,
     "ff_hidden_dim": 512,
     "eval_type": "argmax",
+    "distance_bias": True,
+    "distance_bias_init": 1.0,
+    "eas_hidden_dim": 128,
 }
 
 
@@ -122,6 +133,44 @@ def build_parser():
         help="Dump per-instance lists to the log.",
     )
     parser.add_argument(
+        "--eas_enable",
+        type=str2bool,
+        default=DEFAULT_EAS_ENABLE,
+        help="Enable Efficient Active Search per TSPLIB instance.",
+    )
+    parser.add_argument("--eas_steps", type=int, default=DEFAULT_EAS_STEPS, help="EAS SGD steps per instance.")
+    parser.add_argument("--eas_lr", type=float, default=DEFAULT_EAS_LR, help="EAS adapter learning rate.")
+    parser.add_argument(
+        "--eas_entropy_beta",
+        type=float,
+        default=0.0,
+        help="Optional entropy bonus during EAS adaptation.",
+    )
+    parser.add_argument(
+        "--sgbs_enable",
+        type=str2bool,
+        default=DEFAULT_SGBS_ENABLE,
+        help="Enable Simulation-Guided Beam Search on top of POMO starts.",
+    )
+    parser.add_argument(
+        "--sgbs_beam_width",
+        type=int,
+        default=DEFAULT_SGBS_BEAM_WIDTH,
+        help="Beam multiplier per POMO start; total kept beams are at most problem_size * this value.",
+    )
+    parser.add_argument(
+        "--sgbs_expand_width",
+        type=int,
+        default=DEFAULT_SGBS_EXPAND_WIDTH,
+        help="Number of next-node candidates expanded from each beam.",
+    )
+    parser.add_argument(
+        "--sgbs_simulation_enable",
+        type=str2bool,
+        default=DEFAULT_SGBS_SIMULATION_ENABLE,
+        help="Use greedy rollout tour length to guide SGBS candidate pruning.",
+    )
+    parser.add_argument(
         "--output_json",
         default=None,
         help="Optional path for machine-readable evaluation output in JSON format.",
@@ -162,6 +211,14 @@ def build_tester_params(args):
         "augmentation_enable": args.augmentation_enable,
         "aug_factor": args.aug_factor,
         "detailed_log": args.detailed_log,
+        "eas_enable": args.eas_enable,
+        "eas_steps": args.eas_steps,
+        "eas_lr": args.eas_lr,
+        "eas_entropy_beta": args.eas_entropy_beta,
+        "sgbs_enable": args.sgbs_enable,
+        "sgbs_beam_width": args.sgbs_beam_width,
+        "sgbs_expand_width": args.sgbs_expand_width,
+        "sgbs_simulation_enable": args.sgbs_simulation_enable,
         # Only EUC_2D / CEIL_2D are supported (same as ICAM's LIBUtils.TSPLIBReader)
         "scale_range_all": [[args.scale_min, args.scale_max]],
     }
@@ -193,6 +250,12 @@ def build_result_payload(args, tester_params, result):
         "avg_no_aug_gap": result.avg_no_aug_gap,
         "augmentation_enable": tester_params["augmentation_enable"],
         "aug_factor": tester_params["aug_factor"],
+        "eas_enable": tester_params["eas_enable"],
+        "eas_steps": tester_params["eas_steps"],
+        "sgbs_enable": tester_params["sgbs_enable"],
+        "sgbs_beam_width": tester_params["sgbs_beam_width"],
+        "sgbs_expand_width": tester_params["sgbs_expand_width"],
+        "sgbs_simulation_enable": tester_params["sgbs_simulation_enable"],
         "checkpoint_path": tester_params["checkpoint_path"],
         "data_path": tester_params["filename"],
         "solved_instance_num": result.solved_instance_num,
