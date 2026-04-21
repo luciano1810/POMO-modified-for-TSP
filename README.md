@@ -146,9 +146,9 @@ python train.py
 
 ```bash
 cd TSP/POMO
-python test.py \
+python test_eas.py \
   --data_path ../data/val \
-  --checkpoint_path /path/to/your/checkpoint.pt \
+  --checkpoint_path /home/shaoyw1810/桌面/Projects/SDM-5031-2026-Spring/TSP/POMO/result/20260422_024545_post_train__pref__curriculum_150_200_300_500/checkpoint-50.pt \
   --augmentation_enable true \
   --aug_factor 8 \
   --output_json ./result_lib/your_eval.json

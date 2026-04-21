@@ -48,12 +48,6 @@ DEFAULT_TRAIN_LR_REFERENCE = 1e-4
 DEFAULT_EAS_STEPS = 100
 DEFAULT_EAS_PARAM_GROUP = "embedding"
 DEFAULT_EAS_LOG_INTERVAL = 20
-DEFAULT_EAS_OPTIMIZER = "adamw"
-DEFAULT_EAS_MOMENTUM = 0.9
-DEFAULT_EAS_WEIGHT_DECAY = 0.0
-DEFAULT_EAS_GRAD_CLIP_NORM = 1.0
-DEFAULT_EAS_EARLY_STOP_PATIENCE = 20
-DEFAULT_EAS_EARLY_STOP_MIN_DELTA = 0.0
 
 MODEL_PARAMS = {
     "embedding_dim": 128,
@@ -152,7 +146,7 @@ def build_parser():
         "--eas_steps",
         type=int,
         default=DEFAULT_EAS_STEPS,
-        help="Number of optimizer updates used by EAS on each test instance.",
+        help="Number of SGD updates used by EAS on each test instance.",
     )
     parser.add_argument(
         "--eas_train_lr_reference",
@@ -164,7 +158,7 @@ def build_parser():
         "--eas_lr",
         type=float,
         default=None,
-        help="Explicit EAS optimizer learning rate. Defaults to --eas_train_lr_reference / 10.",
+        help="Explicit EAS SGD learning rate. Defaults to --eas_train_lr_reference / 10.",
     )
     parser.add_argument(
         "--eas_param_group",
@@ -177,42 +171,6 @@ def build_parser():
         type=int,
         default=DEFAULT_EAS_LOG_INTERVAL,
         help="How often to log intermediate EAS updates.",
-    )
-    parser.add_argument(
-        "--eas_optimizer",
-        choices=["sgd", "adamw"],
-        default=DEFAULT_EAS_OPTIMIZER,
-        help="Optimizer used for EAS inner-loop adaptation.",
-    )
-    parser.add_argument(
-        "--eas_momentum",
-        type=float,
-        default=DEFAULT_EAS_MOMENTUM,
-        help="Momentum used when --eas_optimizer=sgd.",
-    )
-    parser.add_argument(
-        "--eas_weight_decay",
-        type=float,
-        default=DEFAULT_EAS_WEIGHT_DECAY,
-        help="Weight decay used by the EAS optimizer.",
-    )
-    parser.add_argument(
-        "--eas_grad_clip_norm",
-        type=float,
-        default=DEFAULT_EAS_GRAD_CLIP_NORM,
-        help="Clip EAS gradients by global norm. Set <= 0 to disable.",
-    )
-    parser.add_argument(
-        "--eas_early_stop_patience",
-        type=int,
-        default=DEFAULT_EAS_EARLY_STOP_PATIENCE,
-        help="Stop EAS early if sampled aug score does not improve for this many steps. Set <= 0 to disable.",
-    )
-    parser.add_argument(
-        "--eas_early_stop_min_delta",
-        type=float,
-        default=DEFAULT_EAS_EARLY_STOP_MIN_DELTA,
-        help="Minimum aug-score improvement required to reset EAS early-stop patience.",
     )
     return parser
 
@@ -241,12 +199,6 @@ def build_tester_params(args):
         "eas_lr": eas_lr,
         "eas_param_group": args.eas_param_group,
         "eas_log_interval": args.eas_log_interval,
-        "eas_optimizer": args.eas_optimizer,
-        "eas_momentum": args.eas_momentum,
-        "eas_weight_decay": args.eas_weight_decay,
-        "eas_grad_clip_norm": args.eas_grad_clip_norm,
-        "eas_early_stop_patience": args.eas_early_stop_patience,
-        "eas_early_stop_min_delta": args.eas_early_stop_min_delta,
         "eas_train_lr_reference": args.eas_train_lr_reference,
     }
 
@@ -280,12 +232,6 @@ def build_result_payload(tester_params, result):
         "eas_steps": tester_params["eas_steps"],
         "eas_lr": tester_params["eas_lr"],
         "eas_param_group": tester_params["eas_param_group"],
-        "eas_optimizer": tester_params["eas_optimizer"],
-        "eas_momentum": tester_params["eas_momentum"],
-        "eas_weight_decay": tester_params["eas_weight_decay"],
-        "eas_grad_clip_norm": tester_params["eas_grad_clip_norm"],
-        "eas_early_stop_patience": tester_params["eas_early_stop_patience"],
-        "eas_early_stop_min_delta": tester_params["eas_early_stop_min_delta"],
         "checkpoint_path": tester_params["checkpoint_path"],
         "data_path": tester_params["filename"],
         "solved_instance_num": result.solved_instance_num,
@@ -344,13 +290,6 @@ def _print_config(args, tester_params):
     logger.info(
         "EAS default LR policy: eas_lr = eas_train_lr_reference / 10 "
         "unless --eas_lr is explicitly provided."
-    )
-    logger.info(
-        "EAS optimizer policy: {} with grad_clip_norm={} and early_stop_patience={}.".format(
-            tester_params["eas_optimizer"],
-            tester_params["eas_grad_clip_norm"],
-            tester_params["eas_early_stop_patience"],
-        )
     )
     logger.info(
         "Primary metric for EAS evaluation: avg_aug_gap "
