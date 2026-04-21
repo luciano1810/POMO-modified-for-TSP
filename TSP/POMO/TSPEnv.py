@@ -112,7 +112,11 @@ class TSPEnv:
         # UPDATE STEP STATE
         self.step_state.current_node = self.current_node
         # shape: (batch, pomo)
-        self.step_state.ninf_mask[self.BATCH_IDX, self.POMO_IDX, self.current_node] = True
+        # Build the next-step mask from a clone so autograd can still use the
+        # previous mask saved during forward/backward.
+        next_ninf_mask = self.step_state.ninf_mask.clone()
+        next_ninf_mask[self.BATCH_IDX, self.POMO_IDX, self.current_node] = True
+        self.step_state.ninf_mask = next_ninf_mask
         # shape: (batch, pomo, node)
 
         # returning values
