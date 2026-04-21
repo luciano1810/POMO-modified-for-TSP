@@ -89,6 +89,8 @@ def build_parser():
     )
     parser.add_argument("--preference_beta", type=float, default=0.1,
                         help="Temperature used in the DPO-style preference loss.")
+    parser.add_argument("--preference_pair_k", type=int, default=4,
+                        help="Use top-k vs bottom-k sampled tours to build multiple preference pairs.")
     parser.add_argument("--preference_loss_weight", type=float, default=1.0,
                         help="Weight applied to the preference loss.")
     parser.add_argument("--rl_loss_weight", type=float, default=0.2,
@@ -156,6 +158,7 @@ def build_trainer_params(args):
         'train_batch_size': args.train_batch_size,
         'train_batch_size_by_problem_size': parse_batch_schedule(args.batch_schedule),
         'preference_beta': args.preference_beta,
+        'preference_pair_k': args.preference_pair_k,
         'preference_loss_weight': args.preference_loss_weight,
         'rl_loss_weight': args.rl_loss_weight,
         'curriculum': {
@@ -227,8 +230,8 @@ def _print_config(args, env_params, model_params, optimizer_params, trainer_para
     logger.info('optimizer_params{}'.format(optimizer_params))
     logger.info('trainer_params{}'.format(trainer_params))
     logger.info(
-        'Preference post-training uses a frozen reference checkpoint and a 100-epoch curriculum '
-        'over larger problem sizes by default.'
+        'Preference post-training uses a frozen reference checkpoint, top-k vs bottom-k '
+        'multi-pair preference supervision, and a 100-epoch curriculum over larger problem sizes by default.'
     )
 
 

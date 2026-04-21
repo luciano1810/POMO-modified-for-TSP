@@ -50,6 +50,12 @@ class TSPPreferenceTrainer:
         self._load_reference_checkpoint()
         self._freeze_reference_model()
 
+        self.logger.info(
+            'Preference pairing: top-k vs bottom-k with k={} (cartesian pairs per instance).'.format(
+                self.trainer_params['preference_pair_k']
+            )
+        )
+
         self.time_estimator = TimeEstimator()
 
     def _load_reference_checkpoint(self):
@@ -162,6 +168,7 @@ class TSPPreferenceTrainer:
                     'result_log': self.result_log.get_raw_data(),
                     'curriculum_problem_sizes': self.trainer_params['curriculum']['problem_sizes'],
                     'preference_beta': self.trainer_params['preference_beta'],
+                    'preference_pair_k': self.trainer_params['preference_pair_k'],
                 }
                 torch.save(checkpoint_dict, '{}/checkpoint-{}.pt'.format(self.result_folder, epoch))
 
@@ -274,10 +281,16 @@ class TSPPreferenceTrainer:
         return reward, prob_tensor, selected_tensor
 
     @staticmethod
-    def _gather_pair_values(values, chosen_idx, rejected_idx):
-        chosen = values.gather(dim=1, index=chosen_idx[:, None]).squeeze(1)
-        rejected = values.gather(dim=1, index=rejected_idx[:, None]).squeeze(1)
-        return chosen, rejected
+    def _build_preference_pair_indices(reward, pair_k):
+        pomo_size = reward.size(1)
+        effective_pair_k = max(1, min(pair_k, max(1, pomo_size // 2)))
+        chosen_idx = reward.topk(effective_pair_k, dim=1, largest=True).indices
+        rejected_idx = reward.topk(effective_pair_k, dim=1, largest=False).indices
+        return chosen_idx, rejected_idx, effective_pair_k
+
+    @staticmethod
+    def _gather_multi_values(values, index):
+        return values.gather(dim=1, index=index)
 
     def _train_one_batch(self, batch_size, problem_size):
         self.model.train()
@@ -297,10 +310,12 @@ class TSPPreferenceTrainer:
         advantage = reward - reward.float().mean(dim=1, keepdim=True)
         rl_loss = (-advantage * log_prob).mean()
 
-        chosen_idx = reward.argmax(dim=1)
-        rejected_idx = reward.argmin(dim=1)
-
-        chosen_log_prob, rejected_log_prob = self._gather_pair_values(log_prob, chosen_idx, rejected_idx)
+        chosen_idx, rejected_idx, _ = self._build_preference_pair_indices(
+            reward,
+            self.trainer_params['preference_pair_k'],
+        )
+        chosen_log_prob = self._gather_multi_values(log_prob, chosen_idx)
+        rejected_log_prob = self._gather_multi_values(log_prob, rejected_idx)
 
         self.reference_model.eval()
         _, ref_prob_list, _ = self._rollout(
@@ -311,12 +326,15 @@ class TSPPreferenceTrainer:
             forced_actions=selected_actions.detach(),
         )
         ref_log_prob = ref_prob_list.clamp_min(1e-12).log().sum(dim=2)
-        ref_chosen_log_prob, ref_rejected_log_prob = self._gather_pair_values(ref_log_prob, chosen_idx, rejected_idx)
+        ref_chosen_log_prob = self._gather_multi_values(ref_log_prob, chosen_idx)
+        ref_rejected_log_prob = self._gather_multi_values(ref_log_prob, rejected_idx)
 
         beta = self.trainer_params['preference_beta']
+        chosen_delta = chosen_log_prob[:, :, None] - rejected_log_prob[:, None, :]
+        ref_delta = ref_chosen_log_prob[:, :, None] - ref_rejected_log_prob[:, None, :]
         preference_logits = beta * (
-            (chosen_log_prob - rejected_log_prob) -
-            (ref_chosen_log_prob - ref_rejected_log_prob)
+            chosen_delta -
+            ref_delta
         )
         preference_loss = -F.logsigmoid(preference_logits).mean()
 

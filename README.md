@@ -174,14 +174,23 @@ cd TSP/POMO
 python post_train_preference.py \
   --base_checkpoint ./result/saved_tsp100_model2_longTrain/checkpoint-3000.pt \
   --epochs 100 \
+  --preference_pair_k 4 \
   --curriculum_problem_sizes 150 200 300 500
 ```
 
 这个脚本默认会：
 
 - 载入已有 checkpoint 作为初始化模型和冻结 reference model
-- 用 DPO 风格的 preference loss，再叠加少量原始 RL loss 保稳定
+- 用 `top-k vs bottom-k` 的多对偏好 supervision 做 DPO 风格 preference loss，再叠加少量原始 RL loss 保稳定
 - 在 `100` 个 epoch 内按课程学习依次覆盖 `150/200/300/500`
+
+其中默认 `preference_pair_k = 4`，也就是同一实例内取前 `4` 条 shortest sampled tours 和后 `4` 条 longest sampled tours，构造多组偏好对；如果你想退化回原来的单对偏好，可以设成：
+
+```bash
+python post_train_preference.py \
+  --base_checkpoint ./result/saved_tsp100_model2_longTrain/checkpoint-3000.pt \
+  --preference_pair_k 1
+```
 
 默认 batch schedule 为：
 
