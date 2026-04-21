@@ -247,6 +247,7 @@ class TSPTrainer:
         # Prep
         ###############################################
         self.model.train()
+        self.optimizer.zero_grad(set_to_none=True)
         train_aug_factor = self.trainer_params.get('train_aug_factor', 1)
         self.env.load_problems(batch_size, aug_factor=train_aug_factor)
         effective_batch_size = self.env.batch_size
@@ -254,10 +255,10 @@ class TSPTrainer:
         self.model.pre_forward(reset_state)
 
         device = reset_state.problems.device
-        prob_list = torch.zeros(size=(effective_batch_size, self.env.pomo_size, 0), device=device)
-        # shape: (batch, pomo, 0~problem)
-        entropy_list = torch.zeros(size=(effective_batch_size, self.env.pomo_size, 0), device=device)
-        # shape: (batch, pomo, 0~problem)
+        log_prob_sum = torch.zeros(size=(effective_batch_size, self.env.pomo_size), device=device)
+        # shape: (batch, pomo)
+        entropy_sum = torch.zeros(size=(effective_batch_size, self.env.pomo_size), device=device)
+        # shape: (batch, pomo)
 
         # POMO Rollout
         ###############################################
@@ -266,14 +267,14 @@ class TSPTrainer:
             selected, prob = self.model(state)
             # shape: (batch, pomo)
             state, reward, done = self.env.step(selected)
-            prob_list = torch.cat((prob_list, prob[:, :, None]), dim=2)
+            log_prob_sum = log_prob_sum + prob.clamp_min(1e-12).log()
 
             if self.model.last_probs is None:
                 entropy = torch.zeros_like(prob)
             else:
                 probs = self.model.last_probs.clamp_min(1e-12)
                 entropy = -(probs * probs.log()).sum(dim=2)
-            entropy_list = torch.cat((entropy_list, entropy[:, :, None]), dim=2)
+            entropy_sum = entropy_sum + entropy
 
         # Loss
         ###############################################
@@ -284,11 +285,8 @@ class TSPTrainer:
             leave_one_out_baseline = reward.float().mean(dim=1, keepdims=True)
         advantage = reward - leave_one_out_baseline
         # shape: (batch, pomo)
-        log_prob = prob_list.log().sum(dim=2)
-        # size = (batch, pomo)
-        trajectory_entropy = entropy_list.sum(dim=2)
         entropy_beta = self._get_entropy_beta(epoch)
-        loss = -advantage * log_prob - entropy_beta * trajectory_entropy
+        loss = -advantage * log_prob_sum - entropy_beta * entropy_sum
         # Minus Sign: To Increase REWARD and policy entropy
         # shape: (batch, pomo)
         loss_mean = loss.mean()
@@ -300,7 +298,6 @@ class TSPTrainer:
 
         # Step & Return
         ###############################################
-        self.model.zero_grad()
         loss_mean.backward()
         self.optimizer.step()
         return score_mean.item(), loss_mean.item()

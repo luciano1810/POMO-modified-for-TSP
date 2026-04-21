@@ -1,4 +1,6 @@
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -268,7 +270,10 @@ class TSP_Decoder(nn.Module):
 
         score_clipped = logit_clipping * torch.tanh(score_scaled)
 
-        score_masked = score_clipped + ninf_mask
+        if ninf_mask.dtype == torch.bool:
+            score_masked = score_clipped.masked_fill(ninf_mask, float('-inf'))
+        else:
+            score_masked = score_clipped + ninf_mask
 
         probs = F.softmax(score_masked, dim=2)
         # shape: (batch, pomo, problem)
@@ -366,7 +371,7 @@ def multi_head_attention(q, k, v, rank2_ninf_mask=None, rank3_ninf_mask=None,
     score = torch.matmul(q, k.transpose(2, 3))
     # shape: (batch, head_num, n, problem)
 
-    score_scaled = score / torch.sqrt(torch.tensor(key_dim, dtype=torch.float))
+    score_scaled = score / math.sqrt(key_dim)
     if distance_bias is not None:
         if distance_bias_alpha is None:
             distance_bias_alpha = 1.0
@@ -374,9 +379,15 @@ def multi_head_attention(q, k, v, rank2_ninf_mask=None, rank3_ninf_mask=None,
             batch_s, head_num, n, input_s
         )
     if rank2_ninf_mask is not None:
-        score_scaled = score_scaled + rank2_ninf_mask[:, None, None, :].expand(batch_s, head_num, n, input_s)
+        if rank2_ninf_mask.dtype == torch.bool:
+            score_scaled = score_scaled.masked_fill(rank2_ninf_mask[:, None, None, :], float('-inf'))
+        else:
+            score_scaled = score_scaled + rank2_ninf_mask[:, None, None, :].expand(batch_s, head_num, n, input_s)
     if rank3_ninf_mask is not None:
-        score_scaled = score_scaled + rank3_ninf_mask[:, None, :, :].expand(batch_s, head_num, n, input_s)
+        if rank3_ninf_mask.dtype == torch.bool:
+            score_scaled = score_scaled.masked_fill(rank3_ninf_mask[:, None, :, :], float('-inf'))
+        else:
+            score_scaled = score_scaled + rank3_ninf_mask[:, None, :, :].expand(batch_s, head_num, n, input_s)
 
     weights = nn.Softmax(dim=3)(score_scaled)
     # shape: (batch, head_num, n, problem)

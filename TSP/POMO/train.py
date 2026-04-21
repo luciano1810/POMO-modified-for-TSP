@@ -37,8 +37,8 @@ env_params = {
 model_params = {
     'embedding_dim': 128,
     'sqrt_embedding_dim': 128**(1/2),
-    'encoder_layer_num': 3,
-    'decoder_layer_num': 3,
+    'encoder_layer_num': 4,
+    'decoder_layer_num': 2,
     'qkv_dim': 16,
     'head_num': 8,
     'logit_clipping': 10,
