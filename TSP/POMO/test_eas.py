@@ -21,13 +21,9 @@ import pytz
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 os.chdir(SCRIPT_DIR)
 
-# POMO/NEW_py_ver utils
 sys.path.insert(0, "../..")  # for utils
-
-# TSProblemDef (used by augmentation)
 sys.path.insert(0, "..")  # for TSProblemDef
 
-# Local TSPLIB dataset (bundled with POMO)
 TSP_DATA_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 
 
@@ -36,7 +32,7 @@ TSP_DATA_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 
 from utils.utils import create_logger, copy_all_src, get_result_folder
 
-from TSPTester_LIB import TSPTester_LIB
+from TSPTester_EAS import TSPTester_EAS
 
 
 ##########################################################################################
@@ -48,6 +44,10 @@ DEFAULT_MODEL_EPOCH = 3000
 DEFAULT_AUGMENTATION_ENABLE = True
 DEFAULT_AUG_FACTOR = 8
 DEFAULT_DETAILED_LOG = True
+DEFAULT_TRAIN_LR_REFERENCE = 1e-4
+DEFAULT_EAS_STEPS = 100
+DEFAULT_EAS_PARAM_GROUP = "embedding"
+DEFAULT_EAS_LOG_INTERVAL = 20
 
 MODEL_PARAMS = {
     "embedding_dim": 128,
@@ -79,9 +79,7 @@ def str2bool(value):
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
-            "Evaluate a TSP model on a directory of TSPLIB instances. "
-            "This is the standardized evaluation entrypoint for both public validation "
-            "and course-staff hidden testing."
+            "Evaluate a TSP model with Efficient Active Search on a directory of TSPLIB instances."
         )
     )
     parser.add_argument("--data_path", default=DEFAULT_DATA_PATH, help="Directory containing .tsp files.")
@@ -112,7 +110,7 @@ def build_parser():
         "--augmentation_enable",
         type=str2bool,
         default=DEFAULT_AUGMENTATION_ENABLE,
-        help="Enable test-time augmentation. Official metric uses aug_gap when available.",
+        help="Enable test-time augmentation before EAS.",
     )
     parser.add_argument("--aug_factor", type=int, default=DEFAULT_AUG_FACTOR, help="Augmentation factor.")
     parser.add_argument(
@@ -144,6 +142,36 @@ def build_parser():
         default=DEFAULT_DEBUG_MODE,
         help="Use a smaller size filter for quick debugging.",
     )
+    parser.add_argument(
+        "--eas_steps",
+        type=int,
+        default=DEFAULT_EAS_STEPS,
+        help="Number of SGD updates used by EAS on each test instance.",
+    )
+    parser.add_argument(
+        "--eas_train_lr_reference",
+        type=float,
+        default=DEFAULT_TRAIN_LR_REFERENCE,
+        help="Reference training LR used to derive the default EAS LR.",
+    )
+    parser.add_argument(
+        "--eas_lr",
+        type=float,
+        default=None,
+        help="Explicit EAS SGD learning rate. Defaults to --eas_train_lr_reference / 10.",
+    )
+    parser.add_argument(
+        "--eas_param_group",
+        choices=["embedding", "decoder_last", "embedding_decoder"],
+        default=DEFAULT_EAS_PARAM_GROUP,
+        help="Small parameter subset to fine-tune for each test instance.",
+    )
+    parser.add_argument(
+        "--eas_log_interval",
+        type=int,
+        default=DEFAULT_EAS_LOG_INTERVAL,
+        help="How often to log intermediate EAS updates.",
+    )
     return parser
 
 
@@ -154,7 +182,11 @@ def resolve_checkpoint_path(args):
 
 
 def build_tester_params(args):
-    tester_params = {
+    eas_lr = args.eas_lr
+    if eas_lr is None:
+        eas_lr = args.eas_train_lr_reference / 10
+
+    return {
         "use_cuda": args.use_cuda,
         "cuda_device_num": args.cuda_device_num,
         "checkpoint_path": resolve_checkpoint_path(args),
@@ -162,17 +194,21 @@ def build_tester_params(args):
         "augmentation_enable": args.augmentation_enable,
         "aug_factor": args.aug_factor,
         "detailed_log": args.detailed_log,
-        # Only EUC_2D / CEIL_2D are supported (same as ICAM's LIBUtils.TSPLIBReader)
         "scale_range_all": [[args.scale_min, args.scale_max]],
+        "eas_steps": args.eas_steps,
+        "eas_lr": eas_lr,
+        "eas_param_group": args.eas_param_group,
+        "eas_log_interval": args.eas_log_interval,
+        "eas_train_lr_reference": args.eas_train_lr_reference,
     }
-    return tester_params
 
 
-def build_logger_params(args, tester_params):
+def build_logger_params(tester_params):
     if tester_params["augmentation_enable"]:
         highlight = f'aug{tester_params["aug_factor"]}'
     else:
         highlight = "no_aug"
+    highlight = f"{highlight}_eas{tester_params['eas_steps']}_{tester_params['eas_param_group']}"
 
     process_start_time = datetime.now(pytz.timezone("Asia/Shanghai"))
     return {
@@ -184,7 +220,7 @@ def build_logger_params(args, tester_params):
     }
 
 
-def build_result_payload(args, tester_params, result):
+def build_result_payload(tester_params, result):
     payload = {
         "interface_version": 1,
         "primary_metric": "avg_aug_gap",
@@ -193,6 +229,9 @@ def build_result_payload(args, tester_params, result):
         "avg_no_aug_gap": result.avg_no_aug_gap,
         "augmentation_enable": tester_params["augmentation_enable"],
         "aug_factor": tester_params["aug_factor"],
+        "eas_steps": tester_params["eas_steps"],
+        "eas_lr": tester_params["eas_lr"],
+        "eas_param_group": tester_params["eas_param_group"],
         "checkpoint_path": tester_params["checkpoint_path"],
         "data_path": tester_params["filename"],
         "solved_instance_num": result.solved_instance_num,
@@ -224,18 +263,17 @@ def main():
     if args.debug:
         tester_params["scale_range_all"] = [[0, 100]]
 
-    logger_params = build_logger_params(args, tester_params)
+    logger_params = build_logger_params(tester_params)
 
     create_logger(**logger_params)
     _print_config(args, tester_params)
 
-    tester = TSPTester_LIB(model_params=MODEL_PARAMS, tester_params=tester_params)
+    tester = TSPTester_EAS(model_params=MODEL_PARAMS, tester_params=tester_params)
 
-    # copy source snapshot
     copy_all_src(get_result_folder())
 
     result = tester.run_lib()
-    payload = build_result_payload(args, tester_params, result)
+    payload = build_result_payload(tester_params, result)
     dump_json_if_needed(args.output_json, payload)
 
     print("SUMMARY_JSON: " + json.dumps(payload, ensure_ascii=False, sort_keys=True))
@@ -250,8 +288,12 @@ def _print_config(args, tester_params):
     if args.output_json is not None:
         logger.info("output_json: {}".format(os.path.abspath(args.output_json)))
     logger.info(
-        "Primary metric for official evaluation: avg_aug_gap "
-        "(computed from augmented inference when public/private optima are available)."
+        "EAS default LR policy: eas_lr = eas_train_lr_reference / 10 "
+        "unless --eas_lr is explicitly provided."
+    )
+    logger.info(
+        "Primary metric for EAS evaluation: avg_aug_gap "
+        "(computed after augmentation + per-instance EAS when public/private optima are available)."
     )
 
 

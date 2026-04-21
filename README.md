@@ -27,9 +27,11 @@ POMO/
 │       ├── train.py             # training entrypoint
 │       ├── post_train_preference.py  # preference-optimization post-training
 │       ├── test.py              # standardized evaluation entrypoint
+│       ├── test_eas.py          # optional EAS evaluation entrypoint
 │       ├── TSPTrainer.py
 │       ├── TSPPreferenceTrainer.py
 │       ├── TSPTester_LIB.py
+│       ├── TSPTester_EAS.py
 │       ├── TSPModel.py
 │       ├── TSPEnv.py
 │       ├── tsplib_utils.py
@@ -67,6 +69,7 @@ https://pytorch.org/get-started/locally/
 - baseline 模型：`TSP/POMO/result/saved_tsp100_model2_longTrain/checkpoint-3000.pt`
 - 训练脚本：`TSP/POMO/train.py`
 - 统一评测脚本：`TSP/POMO/test.py`
+- 可选 EAS 评测脚本：`TSP/POMO/test_eas.py`
 
 当前代码默认读取 TSPLIB 格式实例，并输出：
 
@@ -149,6 +152,19 @@ python test.py \
   --augmentation_enable true \
   --aug_factor 8 \
   --output_json ./result_lib/your_eval.json
+```
+
+### 3.1 可选：用独立的 EAS 脚本做 test-time adaptation
+
+```bash
+cd TSP/POMO
+python test_eas.py \
+  --data_path ../data/val \
+  --checkpoint_path /path/to/your/checkpoint.pt \
+  --augmentation_enable true \
+  --aug_factor 8 \
+  --eas_steps 100 \
+  --eas_param_group embedding
 ```
 
 ### 4. 用 preference optimization 做 post-training，并加入课程学习
