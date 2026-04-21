@@ -25,8 +25,10 @@ POMO/
 │   │   └── val/                  # public validation set, NOT the final hidden test set
 │   └── POMO/
 │       ├── train.py             # training entrypoint
+│       ├── post_train_preference.py  # preference-optimization post-training
 │       ├── test.py              # standardized evaluation entrypoint
 │       ├── TSPTrainer.py
+│       ├── TSPPreferenceTrainer.py
 │       ├── TSPTester_LIB.py
 │       ├── TSPModel.py
 │       ├── TSPEnv.py
@@ -147,6 +149,37 @@ python test.py \
   --augmentation_enable true \
   --aug_factor 8 \
   --output_json ./result_lib/your_eval.json
+```
+
+### 4. 用 preference optimization 做 post-training，并加入课程学习
+
+```bash
+cd TSP/POMO
+python post_train_preference.py \
+  --base_checkpoint ./result/saved_tsp100_model2_longTrain/checkpoint-3000.pt \
+  --epochs 100 \
+  --curriculum_problem_sizes 150 200 300 500
+```
+
+这个脚本默认会：
+
+- 载入已有 checkpoint 作为初始化模型和冻结 reference model
+- 用 DPO 风格的 preference loss，再叠加少量原始 RL loss 保稳定
+- 在 `100` 个 epoch 内按课程学习依次覆盖 `150/200/300/500`
+
+默认 batch schedule 为：
+
+- `150:32`
+- `200:24`
+- `300:12`
+- `500:4`
+
+如果显存不足，可以显式调小：
+
+```bash
+python post_train_preference.py \
+  --base_checkpoint ./result/saved_tsp100_model2_longTrain/checkpoint-3000.pt \
+  --batch_schedule 150:16,200:12,300:8,500:2
 ```
 
 ## Suggested Project Workflow

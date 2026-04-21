@@ -55,12 +55,15 @@ class TSPModel(nn.Module):
 
         return params, param_names
 
-    def forward(self, state):
+    def forward(self, state, selected_override=None):
         batch_size = state.BATCH_IDX.size(0)
         pomo_size = state.BATCH_IDX.size(1)
 
         if state.current_node is None:
-            selected = torch.arange(pomo_size)[None, :].expand(batch_size, pomo_size)
+            if selected_override is None:
+                selected = torch.arange(pomo_size)[None, :].expand(batch_size, pomo_size)
+            else:
+                selected = selected_override
             prob = torch.ones(size=(batch_size, pomo_size))
 
             encoded_first_node = _get_encoding(self.encoded_nodes, selected)
@@ -73,7 +76,11 @@ class TSPModel(nn.Module):
             probs = self.decoder(encoded_last_node, ninf_mask=state.ninf_mask)
             # shape: (batch, pomo, problem)
 
-            if self.training or self.model_params['eval_type'] == 'softmax':
+            if selected_override is not None:
+                selected = selected_override
+                prob = probs[state.BATCH_IDX, state.POMO_IDX, selected] \
+                    .reshape(batch_size, pomo_size)
+            elif self.training or self.model_params['eval_type'] == 'softmax':
                 while True:
                     selected = probs.reshape(batch_size * pomo_size, -1).multinomial(1) \
                         .squeeze(dim=1).reshape(batch_size, pomo_size)
