@@ -30,23 +30,19 @@ from TSPTrainer import TSPTrainer as Trainer
 # parameters
 
 env_params = {
-    'problem_size': 50,
-    'pomo_size': 50,
+    'problem_size': 100,
+    'pomo_size': 100,
 }
 
 model_params = {
     'embedding_dim': 128,
     'sqrt_embedding_dim': 128**(1/2),
-    'encoder_layer_num': 4,
-    'decoder_layer_num': 2,
+    'encoder_layer_num': 6,
     'qkv_dim': 16,
     'head_num': 8,
     'logit_clipping': 10,
     'ff_hidden_dim': 512,
     'eval_type': 'argmax',
-    'distance_bias': True,
-    'distance_bias_init': 1.0,
-    'eas_hidden_dim': 128,
 }
 
 optimizer_params = {
@@ -63,28 +59,12 @@ optimizer_params = {
 trainer_params = {
     'use_cuda': USE_CUDA,
     'cuda_device_num': CUDA_DEVICE_NUM,
-    'epochs': 650,
+    'epochs': 3100,
     'train_episodes': 100 * 1000,
     'train_batch_size': 64,
-    'train_aug_factor': 8,
-    'entropy_bonus': {
-        'enable': True,
-        'beta_start': 0.01,
-        'beta_end': 0.0,
-        'anneal_epochs': 650,
-    },
-    'curriculum': {
-        'enable': True,
-        'stages': [
-            {'problem_size': 50, 'epochs': 50, 'train_episodes': 100 * 1000, 'train_batch_size': 64},
-            {'problem_size': 100, 'epochs': 100, 'train_episodes': 100 * 1000, 'train_batch_size': 64},
-            {'problem_size': 200, 'epochs': 200, 'train_episodes': 100 * 1000, 'train_batch_size': 32},
-            {'problem_size': 300, 'epochs': 300, 'train_episodes': 100 * 1000, 'train_batch_size': 16},
-        ],
-    },
     'logging': {
-        'model_save_interval': 50,
-        'img_save_interval': 50,
+        'model_save_interval': 100,
+        'img_save_interval': 100,
         'log_image_params_1': {
             'json_foldername': 'log_image_style',
             'filename': 'style_tsp_100.json'
@@ -104,7 +84,7 @@ trainer_params = {
 
 logger_params = {
     'log_file': {
-        'desc': 'train__tsp_curriculum_50e_100e_200e_300e',
+        'desc': 'train__tsp_n100__3000epoch',
         'filename': 'log.txt'
     }
 }
@@ -130,16 +110,10 @@ def main():
 
 
 def _set_debug_mode():
-    global env_params, trainer_params
-    env_params['problem_size'] = 20
-    env_params['pomo_size'] = 20
+    global trainer_params
     trainer_params['epochs'] = 2
     trainer_params['train_episodes'] = 10
     trainer_params['train_batch_size'] = 4
-    trainer_params['entropy_bonus']['anneal_epochs'] = 2
-    trainer_params['curriculum']['stages'] = [
-        {'problem_size': 20, 'epochs': 2, 'train_episodes': 10, 'train_batch_size': 4},
-    ]
 
 
 def _print_config():

@@ -12,5 +12,3 @@ TSP/POMO/result_lib/
 NEW_py_ver/TSP/data/tsplib/*
 NEW_py_ver/TSP/POMO/result_lib/*
 NEW_py_ver/TSP/data/*
-.vscode/settings.json
-.DS_Store

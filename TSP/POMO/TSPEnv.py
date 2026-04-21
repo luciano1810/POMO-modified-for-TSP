@@ -67,28 +67,19 @@ class TSPEnv:
             else:
                 raise NotImplementedError
 
-        device = self.problems.device
-        self.BATCH_IDX = torch.arange(self.batch_size, device=device)[:, None].expand(self.batch_size, self.pomo_size)
-        self.POMO_IDX = torch.arange(self.pomo_size, device=device)[None, :].expand(self.batch_size, self.pomo_size)
+        self.BATCH_IDX = torch.arange(self.batch_size)[:, None].expand(self.batch_size, self.pomo_size)
+        self.POMO_IDX = torch.arange(self.pomo_size)[None, :].expand(self.batch_size, self.pomo_size)
 
     def reset(self):
         self.selected_count = 0
         self.current_node = None
         # shape: (batch, pomo)
-        self.selected_node_list = torch.empty(
-            (self.batch_size, self.pomo_size, self.problem_size),
-            dtype=torch.long,
-            device=self.problems.device,
-        )
-        # shape: (batch, pomo, problem)
+        self.selected_node_list = torch.zeros((self.batch_size, self.pomo_size, 0), dtype=torch.long)
+        # shape: (batch, pomo, 0~problem)
 
         # CREATE STEP STATE
         self.step_state = Step_State(BATCH_IDX=self.BATCH_IDX, POMO_IDX=self.POMO_IDX)
-        self.step_state.ninf_mask = torch.zeros(
-            (self.batch_size, self.pomo_size, self.problem_size),
-            dtype=torch.bool,
-            device=self.problems.device,
-        )
+        self.step_state.ninf_mask = torch.zeros((self.batch_size, self.pomo_size, self.problem_size))
         # shape: (batch, pomo, problem)
 
         reward = None
@@ -106,17 +97,13 @@ class TSPEnv:
         self.selected_count += 1
         self.current_node = selected
         # shape: (batch, pomo)
-        self.selected_node_list[:, :, self.selected_count - 1] = self.current_node
-        # shape: (batch, pomo, problem)
+        self.selected_node_list = torch.cat((self.selected_node_list, self.current_node[:, :, None]), dim=2)
+        # shape: (batch, pomo, 0~problem)
 
         # UPDATE STEP STATE
         self.step_state.current_node = self.current_node
         # shape: (batch, pomo)
-        # Build the next-step mask from a clone so autograd can still use the
-        # previous mask saved during forward/backward.
-        next_ninf_mask = self.step_state.ninf_mask.clone()
-        next_ninf_mask[self.BATCH_IDX, self.POMO_IDX, self.current_node] = True
-        self.step_state.ninf_mask = next_ninf_mask
+        self.step_state.ninf_mask[self.BATCH_IDX, self.POMO_IDX, self.current_node] = float('-inf')
         # shape: (batch, pomo, node)
 
         # returning values
@@ -129,8 +116,7 @@ class TSPEnv:
         return self.step_state, reward, done
 
     def _get_travel_distance(self, lib_mode: bool = False):
-        selected_node_list = self.selected_node_list[:, :, :self.selected_count]
-        gathering_index = selected_node_list.unsqueeze(3).expand(self.batch_size, -1, self.selected_count, 2)
+        gathering_index = self.selected_node_list.unsqueeze(3).expand(self.batch_size, -1, self.problem_size, 2)
         # shape: (batch, pomo, problem, 2)
 
         if lib_mode and self.original_node_xy_lib is not None:
@@ -166,3 +152,4 @@ class TSPEnv:
         travel_distances = segment_lengths.sum(2)
         # shape: (batch, pomo)
         return travel_distances
+

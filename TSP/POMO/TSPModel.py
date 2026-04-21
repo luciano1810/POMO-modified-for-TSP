@@ -1,6 +1,4 @@
 
-import math
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,7 +13,6 @@ class TSPModel(nn.Module):
         self.encoder = TSP_Encoder(**model_params)
         self.decoder = TSP_Decoder(**model_params)
         self.encoded_nodes = None
-        self.last_probs = None
         # shape: (batch, problem, EMBEDDING_DIM)
 
     def pre_forward(self, reset_state):
@@ -23,33 +20,57 @@ class TSPModel(nn.Module):
         # shape: (batch, problem, EMBEDDING_DIM)
         self.decoder.set_kv(self.encoded_nodes)
 
-    def set_first_nodes(self, first_nodes):
-        encoded_first_node = _get_encoding(self.encoded_nodes, first_nodes)
-        # shape: (batch, pomo/beam, embedding)
-        self.decoder.set_q1(encoded_first_node)
+    def set_eval_type(self, eval_type):
+        self.model_params['eval_type'] = eval_type
 
-    def get_action_probs(self, current_node, ninf_mask, first_nodes=None):
-        if first_nodes is not None:
-            self.set_first_nodes(first_nodes)
+    def get_eas_parameters(self, target):
+        group_specs = {
+            'embedding': [
+                ('encoder.embedding', self.encoder.embedding),
+            ],
+            'decoder_last': [
+                ('decoder.Wq_last', self.decoder.Wq_last),
+                ('decoder.multi_head_combine', self.decoder.multi_head_combine),
+            ],
+            'embedding_decoder': [
+                ('encoder.embedding', self.encoder.embedding),
+                ('decoder.Wq_last', self.decoder.Wq_last),
+                ('decoder.multi_head_combine', self.decoder.multi_head_combine),
+            ],
+        }
+        if target not in group_specs:
+            raise ValueError(f"Unsupported EAS parameter group: {target}")
 
-        encoded_last_node = _get_encoding(self.encoded_nodes, current_node)
-        # shape: (batch, pomo/beam, embedding)
-        return self.decoder(encoded_last_node, ninf_mask=ninf_mask)
+        params = []
+        param_names = []
+        seen_param_ids = set()
+        for module_prefix, module in group_specs[target]:
+            for param_name, param in module.named_parameters():
+                param_id = id(param)
+                if param_id in seen_param_ids:
+                    continue
+                seen_param_ids.add(param_id)
+                params.append(param)
+                param_names.append(f'{module_prefix}.{param_name}')
+
+        return params, param_names
 
     def forward(self, state):
         batch_size = state.BATCH_IDX.size(0)
         pomo_size = state.BATCH_IDX.size(1)
 
         if state.current_node is None:
-            selected = torch.arange(pomo_size, device=state.BATCH_IDX.device)[None, :].expand(batch_size, pomo_size)
-            prob = torch.ones(size=(batch_size, pomo_size), device=state.BATCH_IDX.device)
-            self.last_probs = None
+            selected = torch.arange(pomo_size)[None, :].expand(batch_size, pomo_size)
+            prob = torch.ones(size=(batch_size, pomo_size))
 
-            self.set_first_nodes(selected)
+            encoded_first_node = _get_encoding(self.encoded_nodes, selected)
+            # shape: (batch, pomo, embedding)
+            self.decoder.set_q1(encoded_first_node)
 
         else:
-            probs = self.get_action_probs(state.current_node, state.ninf_mask)
-            self.last_probs = probs
+            encoded_last_node = _get_encoding(self.encoded_nodes, state.current_node)
+            # shape: (batch, pomo, embedding)
+            probs = self.decoder(encoded_last_node, ninf_mask=state.ninf_mask)
             # shape: (batch, pomo, problem)
 
             if self.training or self.model_params['eval_type'] == 'softmax':
@@ -104,7 +125,6 @@ class TSP_Encoder(nn.Module):
 
         self.embedding = nn.Linear(2, embedding_dim)
         self.layers = nn.ModuleList([EncoderLayer(**model_params) for _ in range(encoder_layer_num)])
-        self.use_distance_bias = model_params.get('distance_bias', True)
 
     def forward(self, data):
         # data.shape: (batch, problem, 2)
@@ -112,14 +132,9 @@ class TSP_Encoder(nn.Module):
         embedded_input = self.embedding(data)
         # shape: (batch, problem, embedding)
 
-        distance_matrix = None
-        if self.use_distance_bias:
-            distance_matrix = torch.cdist(data, data, p=2)
-            # shape: (batch, problem, problem)
-
         out = embedded_input
         for layer in self.layers:
-            out = layer(out, distance_matrix=distance_matrix)
+            out = layer(out)
 
         return out
 
@@ -136,15 +151,12 @@ class EncoderLayer(nn.Module):
         self.Wk = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
         self.Wv = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
         self.multi_head_combine = nn.Linear(head_num * qkv_dim, embedding_dim)
-        self.distance_bias_alpha = nn.Parameter(torch.tensor(
-            float(model_params.get('distance_bias_init', 1.0))
-        ))
 
         self.addAndNormalization1 = Add_And_Normalization_Module(**model_params)
         self.feedForward = Feed_Forward_Module(**model_params)
         self.addAndNormalization2 = Add_And_Normalization_Module(**model_params)
 
-    def forward(self, input1, distance_matrix=None):
+    def forward(self, input1):
         # input.shape: (batch, problem, EMBEDDING_DIM)
         head_num = self.model_params['head_num']
 
@@ -153,15 +165,7 @@ class EncoderLayer(nn.Module):
         v = reshape_by_heads(self.Wv(input1), head_num=head_num)
         # q shape: (batch, HEAD_NUM, problem, KEY_DIM)
 
-        distance_bias_alpha = None
-        if distance_matrix is not None:
-            distance_bias_alpha = F.softplus(self.distance_bias_alpha)
-
-        out_concat = multi_head_attention(
-            q, k, v,
-            distance_bias=distance_matrix,
-            distance_bias_alpha=distance_bias_alpha,
-        )
+        out_concat = multi_head_attention(q, k, v)
         # shape: (batch, problem, HEAD_NUM*KEY_DIM)
 
         multi_head_out = self.multi_head_combine(out_concat)
@@ -193,19 +197,6 @@ class TSP_Decoder(nn.Module):
         self.Wv = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
 
         self.multi_head_combine = nn.Linear(head_num * qkv_dim, embedding_dim)
-        decoder_layer_num = self.model_params.get('decoder_layer_num', 1)
-        self.extra_layers = nn.ModuleList([
-            DecoderLayer(**model_params) for _ in range(max(0, decoder_layer_num - 1))
-        ])
-
-        eas_hidden_dim = self.model_params.get('eas_hidden_dim', embedding_dim)
-        self.eas_adapter = nn.Sequential(
-            nn.Linear(embedding_dim, eas_hidden_dim),
-            nn.ReLU(),
-            nn.Linear(eas_hidden_dim, embedding_dim),
-        )
-        self.eas_enabled = False
-        self.reset_eas_adapter()
 
         self.k = None  # saved key, for multi-head attention
         self.v = None  # saved value, for multi-head_attention
@@ -221,8 +212,6 @@ class TSP_Decoder(nn.Module):
         # shape: (batch, head_num, pomo, qkv_dim)
         self.single_head_key = encoded_nodes.transpose(1, 2)
         # shape: (batch, embedding, problem)
-        for layer in self.extra_layers:
-            layer.set_kv(encoded_nodes)
 
     def set_q1(self, encoded_q1):
         # encoded_q.shape: (batch, n, embedding)  # n can be 1 or pomo
@@ -251,12 +240,6 @@ class TSP_Decoder(nn.Module):
         mh_atten_out = self.multi_head_combine(out_concat)
         # shape: (batch, pomo, embedding)
 
-        for layer in self.extra_layers:
-            mh_atten_out = layer(mh_atten_out, ninf_mask)
-
-        if self.eas_enabled:
-            mh_atten_out = mh_atten_out + self.eas_adapter(mh_atten_out)
-
         #  Single-Head Attention, for probability calculation
         #######################################################
         score = torch.matmul(mh_atten_out, self.single_head_key)
@@ -270,69 +253,12 @@ class TSP_Decoder(nn.Module):
 
         score_clipped = logit_clipping * torch.tanh(score_scaled)
 
-        if ninf_mask.dtype == torch.bool:
-            score_masked = score_clipped.masked_fill(ninf_mask, float('-inf'))
-        else:
-            score_masked = score_clipped + ninf_mask
+        score_masked = score_clipped + ninf_mask
 
         probs = F.softmax(score_masked, dim=2)
         # shape: (batch, pomo, problem)
 
         return probs
-
-    def reset_eas_adapter(self):
-        for module in self.eas_adapter.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
-                nn.init.zeros_(module.bias)
-        nn.init.zeros_(self.eas_adapter[-1].weight)
-        nn.init.zeros_(self.eas_adapter[-1].bias)
-
-    def enable_eas(self):
-        self.eas_enabled = True
-
-    def disable_eas(self):
-        self.eas_enabled = False
-
-
-class DecoderLayer(nn.Module):
-    def __init__(self, **model_params):
-        super().__init__()
-        self.model_params = model_params
-        embedding_dim = self.model_params['embedding_dim']
-        head_num = self.model_params['head_num']
-        qkv_dim = self.model_params['qkv_dim']
-
-        self.Wq = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
-        self.Wk = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
-        self.Wv = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
-        self.multi_head_combine = nn.Linear(head_num * qkv_dim, embedding_dim)
-
-        self.addAndNormalization1 = Add_And_Normalization_Module(**model_params)
-        self.feedForward = Feed_Forward_Module(**model_params)
-        self.addAndNormalization2 = Add_And_Normalization_Module(**model_params)
-
-        self.k = None
-        self.v = None
-
-    def set_kv(self, encoded_nodes):
-        head_num = self.model_params['head_num']
-        self.k = reshape_by_heads(self.Wk(encoded_nodes), head_num=head_num)
-        self.v = reshape_by_heads(self.Wv(encoded_nodes), head_num=head_num)
-
-    def forward(self, input1, ninf_mask):
-        # input1.shape: (batch, pomo/beam, embedding)
-        head_num = self.model_params['head_num']
-
-        q = reshape_by_heads(self.Wq(input1), head_num=head_num)
-        out_concat = multi_head_attention(q, self.k, self.v, rank3_ninf_mask=ninf_mask)
-        multi_head_out = self.multi_head_combine(out_concat)
-
-        out1 = self.addAndNormalization1(input1, multi_head_out)
-        out2 = self.feedForward(out1)
-        out3 = self.addAndNormalization2(out1, out2)
-
-        return out3
 
 
 ########################################
@@ -354,8 +280,7 @@ def reshape_by_heads(qkv, head_num):
     return q_transposed
 
 
-def multi_head_attention(q, k, v, rank2_ninf_mask=None, rank3_ninf_mask=None,
-                         distance_bias=None, distance_bias_alpha=None):
+def multi_head_attention(q, k, v, rank2_ninf_mask=None, rank3_ninf_mask=None):
     # q shape: (batch, head_num, n, key_dim)   : n can be either 1 or PROBLEM_SIZE
     # k,v shape: (batch, head_num, problem, key_dim)
     # rank2_ninf_mask.shape: (batch, problem)
@@ -371,23 +296,11 @@ def multi_head_attention(q, k, v, rank2_ninf_mask=None, rank3_ninf_mask=None,
     score = torch.matmul(q, k.transpose(2, 3))
     # shape: (batch, head_num, n, problem)
 
-    score_scaled = score / math.sqrt(key_dim)
-    if distance_bias is not None:
-        if distance_bias_alpha is None:
-            distance_bias_alpha = 1.0
-        score_scaled = score_scaled - distance_bias_alpha * distance_bias[:, None, :, :].expand(
-            batch_s, head_num, n, input_s
-        )
+    score_scaled = score / torch.sqrt(torch.tensor(key_dim, dtype=torch.float))
     if rank2_ninf_mask is not None:
-        if rank2_ninf_mask.dtype == torch.bool:
-            score_scaled = score_scaled.masked_fill(rank2_ninf_mask[:, None, None, :], float('-inf'))
-        else:
-            score_scaled = score_scaled + rank2_ninf_mask[:, None, None, :].expand(batch_s, head_num, n, input_s)
+        score_scaled = score_scaled + rank2_ninf_mask[:, None, None, :].expand(batch_s, head_num, n, input_s)
     if rank3_ninf_mask is not None:
-        if rank3_ninf_mask.dtype == torch.bool:
-            score_scaled = score_scaled.masked_fill(rank3_ninf_mask[:, None, :, :], float('-inf'))
-        else:
-            score_scaled = score_scaled + rank3_ninf_mask[:, None, :, :].expand(batch_s, head_num, n, input_s)
+        score_scaled = score_scaled + rank3_ninf_mask[:, None, :, :].expand(batch_s, head_num, n, input_s)
 
     weights = nn.Softmax(dim=3)(score_scaled)
     # shape: (batch, head_num, n, problem)

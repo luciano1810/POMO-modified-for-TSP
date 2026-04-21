@@ -48,27 +48,21 @@ DEFAULT_MODEL_EPOCH = 3000
 DEFAULT_AUGMENTATION_ENABLE = True
 DEFAULT_AUG_FACTOR = 8
 DEFAULT_DETAILED_LOG = True
-DEFAULT_EAS_ENABLE = False
+DEFAULT_TRAIN_LR_REFERENCE = 1e-4
+DEFAULT_EAS_ENABLE = True
 DEFAULT_EAS_STEPS = 100
-DEFAULT_EAS_LR = 1e-3
-DEFAULT_SGBS_ENABLE = False
-DEFAULT_SGBS_BEAM_WIDTH = 4
-DEFAULT_SGBS_EXPAND_WIDTH = 4
-DEFAULT_SGBS_SIMULATION_ENABLE = True
+DEFAULT_EAS_PARAM_GROUP = "embedding"
+DEFAULT_EAS_LOG_INTERVAL = 20
 
 MODEL_PARAMS = {
     "embedding_dim": 128,
     "sqrt_embedding_dim": 128 ** (1 / 2),
-    "encoder_layer_num": 3,
-    "decoder_layer_num": 3,
+    "encoder_layer_num": 6,
     "qkv_dim": 16,
     "head_num": 8,
     "logit_clipping": 10,
     "ff_hidden_dim": 512,
     "eval_type": "argmax",
-    "distance_bias": True,
-    "distance_bias_init": 1.0,
-    "eas_hidden_dim": 128,
 }
 
 
@@ -133,44 +127,6 @@ def build_parser():
         help="Dump per-instance lists to the log.",
     )
     parser.add_argument(
-        "--eas_enable",
-        type=str2bool,
-        default=DEFAULT_EAS_ENABLE,
-        help="Enable Efficient Active Search per TSPLIB instance.",
-    )
-    parser.add_argument("--eas_steps", type=int, default=DEFAULT_EAS_STEPS, help="EAS SGD steps per instance.")
-    parser.add_argument("--eas_lr", type=float, default=DEFAULT_EAS_LR, help="EAS adapter learning rate.")
-    parser.add_argument(
-        "--eas_entropy_beta",
-        type=float,
-        default=0.0,
-        help="Optional entropy bonus during EAS adaptation.",
-    )
-    parser.add_argument(
-        "--sgbs_enable",
-        type=str2bool,
-        default=DEFAULT_SGBS_ENABLE,
-        help="Enable Simulation-Guided Beam Search on top of POMO starts.",
-    )
-    parser.add_argument(
-        "--sgbs_beam_width",
-        type=int,
-        default=DEFAULT_SGBS_BEAM_WIDTH,
-        help="Beam multiplier per POMO start; total kept beams are at most problem_size * this value.",
-    )
-    parser.add_argument(
-        "--sgbs_expand_width",
-        type=int,
-        default=DEFAULT_SGBS_EXPAND_WIDTH,
-        help="Number of next-node candidates expanded from each beam.",
-    )
-    parser.add_argument(
-        "--sgbs_simulation_enable",
-        type=str2bool,
-        default=DEFAULT_SGBS_SIMULATION_ENABLE,
-        help="Use greedy rollout tour length to guide SGBS candidate pruning.",
-    )
-    parser.add_argument(
         "--output_json",
         default=None,
         help="Optional path for machine-readable evaluation output in JSON format.",
@@ -193,6 +149,42 @@ def build_parser():
         default=DEFAULT_DEBUG_MODE,
         help="Use a smaller size filter for quick debugging.",
     )
+    parser.add_argument(
+        "--eas_enable",
+        type=str2bool,
+        default=DEFAULT_EAS_ENABLE,
+        help="Enable Efficient Active Search during testing.",
+    )
+    parser.add_argument(
+        "--eas_steps",
+        type=int,
+        default=DEFAULT_EAS_STEPS,
+        help="Number of SGD updates used by EAS on each test instance.",
+    )
+    parser.add_argument(
+        "--eas_train_lr_reference",
+        type=float,
+        default=DEFAULT_TRAIN_LR_REFERENCE,
+        help="Reference training LR used to derive the default EAS LR.",
+    )
+    parser.add_argument(
+        "--eas_lr",
+        type=float,
+        default=None,
+        help="Explicit EAS SGD learning rate. Defaults to --eas_train_lr_reference / 10.",
+    )
+    parser.add_argument(
+        "--eas_param_group",
+        choices=["embedding", "decoder_last", "embedding_decoder"],
+        default=DEFAULT_EAS_PARAM_GROUP,
+        help="Small parameter subset to fine-tune for each test instance.",
+    )
+    parser.add_argument(
+        "--eas_log_interval",
+        type=int,
+        default=DEFAULT_EAS_LOG_INTERVAL,
+        help="How often to log intermediate EAS updates.",
+    )
     return parser
 
 
@@ -203,6 +195,10 @@ def resolve_checkpoint_path(args):
 
 
 def build_tester_params(args):
+    eas_lr = args.eas_lr
+    if eas_lr is None:
+        eas_lr = args.eas_train_lr_reference / 10
+
     tester_params = {
         "use_cuda": args.use_cuda,
         "cuda_device_num": args.cuda_device_num,
@@ -211,16 +207,14 @@ def build_tester_params(args):
         "augmentation_enable": args.augmentation_enable,
         "aug_factor": args.aug_factor,
         "detailed_log": args.detailed_log,
-        "eas_enable": args.eas_enable,
-        "eas_steps": args.eas_steps,
-        "eas_lr": args.eas_lr,
-        "eas_entropy_beta": args.eas_entropy_beta,
-        "sgbs_enable": args.sgbs_enable,
-        "sgbs_beam_width": args.sgbs_beam_width,
-        "sgbs_expand_width": args.sgbs_expand_width,
-        "sgbs_simulation_enable": args.sgbs_simulation_enable,
         # Only EUC_2D / CEIL_2D are supported (same as ICAM's LIBUtils.TSPLIBReader)
         "scale_range_all": [[args.scale_min, args.scale_max]],
+        "eas_enable": args.eas_enable,
+        "eas_steps": args.eas_steps,
+        "eas_lr": eas_lr,
+        "eas_param_group": args.eas_param_group,
+        "eas_log_interval": args.eas_log_interval,
+        "eas_train_lr_reference": args.eas_train_lr_reference,
     }
     return tester_params
 
@@ -230,6 +224,8 @@ def build_logger_params(args, tester_params):
         highlight = f'aug{tester_params["aug_factor"]}'
     else:
         highlight = "no_aug"
+    if tester_params["eas_enable"]:
+        highlight = f"{highlight}_eas{tester_params['eas_steps']}_{tester_params['eas_param_group']}"
 
     process_start_time = datetime.now(pytz.timezone("Asia/Shanghai"))
     return {
@@ -252,10 +248,8 @@ def build_result_payload(args, tester_params, result):
         "aug_factor": tester_params["aug_factor"],
         "eas_enable": tester_params["eas_enable"],
         "eas_steps": tester_params["eas_steps"],
-        "sgbs_enable": tester_params["sgbs_enable"],
-        "sgbs_beam_width": tester_params["sgbs_beam_width"],
-        "sgbs_expand_width": tester_params["sgbs_expand_width"],
-        "sgbs_simulation_enable": tester_params["sgbs_simulation_enable"],
+        "eas_lr": tester_params["eas_lr"],
+        "eas_param_group": tester_params["eas_param_group"],
         "checkpoint_path": tester_params["checkpoint_path"],
         "data_path": tester_params["filename"],
         "solved_instance_num": result.solved_instance_num,
@@ -312,6 +306,10 @@ def _print_config(args, tester_params):
     logger.info("tester_params{}".format(tester_params))
     if args.output_json is not None:
         logger.info("output_json: {}".format(os.path.abspath(args.output_json)))
+    logger.info(
+        "EAS default LR policy: eas_lr = eas_train_lr_reference / 10 "
+        "unless --eas_lr is explicitly provided."
+    )
     logger.info(
         "Primary metric for official evaluation: avg_aug_gap "
         "(computed from augmented inference when public/private optima are available)."
