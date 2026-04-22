@@ -75,6 +75,8 @@ def build_parser():
                         help="Number of training episodes per epoch.")
     parser.add_argument("--train_batch_size", type=int, default=4,
                         help="Fallback batch size when a problem size is not in --batch_schedule.")
+    parser.add_argument("--min_train_batch_size", type=int, default=1,
+                        help="Minimum batch size allowed when auto-reducing after CUDA OOM.")
     parser.add_argument(
         "--batch_schedule",
         default="150:32,200:24,300:12,500:4",
@@ -156,6 +158,7 @@ def build_trainer_params(args):
         'epochs': args.epochs,
         'train_episodes': args.train_episodes,
         'train_batch_size': args.train_batch_size,
+        'min_train_batch_size': args.min_train_batch_size,
         'train_batch_size_by_problem_size': parse_batch_schedule(args.batch_schedule),
         'preference_beta': args.preference_beta,
         'preference_pair_k': args.preference_pair_k,

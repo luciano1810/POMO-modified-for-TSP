@@ -101,6 +101,29 @@ class TSPPreferenceTrainer:
             return batch_schedule[problem_size]
         return self.trainer_params['train_batch_size']
 
+    def _handle_oom(self, problem_size, attempted_batch_size, error):
+        if 'out of memory' not in str(error).lower():
+            raise error
+
+        reduced_batch_size = attempted_batch_size // 2
+        if reduced_batch_size < self.trainer_params['min_train_batch_size']:
+            raise error
+
+        self.logger.warning(
+            'CUDA OOM at problem_size={}, batch_size={}. Reducing batch size to {} and retrying.'.format(
+                problem_size,
+                attempted_batch_size,
+                reduced_batch_size,
+            )
+        )
+
+        self.optimizer.zero_grad(set_to_none=True)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        self.trainer_params['train_batch_size_by_problem_size'][problem_size] = reduced_batch_size
+        return reduced_batch_size
+
     def _build_env(self, problem_size):
         env = Env(problem_size=problem_size, pomo_size=problem_size)
         return env
@@ -207,10 +230,15 @@ class TSPPreferenceTrainer:
             remaining = train_num_episode - episode
             current_batch_size = min(batch_size, remaining)
 
-            avg_score, avg_loss, avg_pref_loss, avg_rl_loss = self._train_one_batch(
-                batch_size=current_batch_size,
-                problem_size=problem_size,
-            )
+            try:
+                avg_score, avg_loss, avg_pref_loss, avg_rl_loss = self._train_one_batch(
+                    batch_size=current_batch_size,
+                    problem_size=problem_size,
+                )
+            except RuntimeError as error:
+                current_batch_size = self._handle_oom(problem_size, current_batch_size, error)
+                batch_size = self._get_train_batch_size(problem_size)
+                continue
             score_AM.update(avg_score, current_batch_size)
             loss_AM.update(avg_loss, current_batch_size)
             pref_loss_AM.update(avg_pref_loss, current_batch_size)

@@ -199,11 +199,14 @@ python post_train_preference.py \
 - `300:12`
 - `500:4`
 
+如果在课程学习进入更大 problem size 后出现显存不足，例如超过 `50` 个 epoch 后切到 `300` 规模时 OOM，训练器现在会自动把当前规模的 batch size 减半并重试，直到不低于 `--min_train_batch_size`。
+
 如果显存不足，可以显式调小：
 
 ```bash
 python post_train_preference.py \
   --base_checkpoint ./result/saved_tsp100_model2_longTrain/checkpoint-3000.pt \
+  --min_train_batch_size 1 \
   --batch_schedule 150:16,200:12,300:8,500:2
 ```
 
