@@ -49,6 +49,7 @@ DEFAULT_DETAILED_LOG = True
 DEFAULT_TRAIN_LR_REFERENCE = 1e-4
 DEFAULT_EAS_STEPS = 100
 DEFAULT_EAS_PARAM_GROUP = "embedding"
+DEFAULT_EAS_RECORD_INTERVAL = 10
 DEFAULT_EAS_LOG_INTERVAL = 20
 
 MODEL_PARAMS = {
@@ -181,6 +182,12 @@ def build_parser():
         help="Small parameter subset to fine-tune for each test instance.",
     )
     parser.add_argument(
+        "--eas_record_interval",
+        type=int,
+        default=DEFAULT_EAS_RECORD_INTERVAL,
+        help="Record an EAS candidate checkpoint every N updates and use the best recorded one for final inference.",
+    )
+    parser.add_argument(
         "--eas_log_interval",
         type=int,
         default=DEFAULT_EAS_LOG_INTERVAL,
@@ -214,6 +221,7 @@ def build_tester_params(args):
         "eas_steps": args.eas_steps,
         "eas_lr": eas_lr,
         "eas_param_group": args.eas_param_group,
+        "eas_record_interval": max(1, args.eas_record_interval),
         "eas_log_interval": args.eas_log_interval,
         "eas_train_lr_reference": args.eas_train_lr_reference,
     }
@@ -253,6 +261,7 @@ def build_result_payload(tester_params, result):
         "eas_steps": tester_params["eas_steps"],
         "eas_lr": tester_params["eas_lr"],
         "eas_param_group": tester_params["eas_param_group"],
+        "eas_record_interval": tester_params["eas_record_interval"],
         "checkpoint_path": tester_params["checkpoint_path"],
         "data_path": tester_params["filename"],
         "solved_instance_num": result.solved_instance_num,
@@ -311,6 +320,11 @@ def _print_config(args, tester_params):
     logger.info(
         "EAS default LR policy: eas_lr = eas_train_lr_reference / 10 "
         "unless --eas_lr is explicitly provided."
+    )
+    logger.info(
+        "EAS candidate selection: record every {} updates and use the best recorded checkpoint for final inference.".format(
+            tester_params["eas_record_interval"],
+        )
     )
     logger.info(
         "Final post-EAS test strategy: num_samples={}, enable_2opt={} "

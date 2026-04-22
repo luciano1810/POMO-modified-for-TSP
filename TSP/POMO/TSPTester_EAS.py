@@ -41,6 +41,19 @@ class TSPTester_EAS(TSPTester_LIB):
             param.requires_grad_(True)
         return eas_params
 
+    @staticmethod
+    def _is_better_candidate(
+        no_aug_score: float,
+        aug_score: float,
+        best_no_aug_score: float,
+        best_aug_score: float,
+    ) -> bool:
+        if aug_score < best_aug_score:
+            return True
+        if aug_score == best_aug_score and no_aug_score < best_no_aug_score:
+            return True
+        return False
+
     def _run_eas(self, env) -> Tuple[float, float]:
         eas_params = self._set_eas_trainable_params()
         optimizer = torch.optim.SGD(eas_params, lr=self.tester_params['eas_lr'])
@@ -48,7 +61,12 @@ class TSPTester_EAS(TSPTester_LIB):
         best_no_aug_score = float('inf')
         best_aug_score = float('inf')
         eas_steps = self.tester_params['eas_steps']
+        record_interval = max(1, self.tester_params['eas_record_interval'])
         log_interval = max(1, self.tester_params['eas_log_interval'])
+        best_recorded_no_aug_score = float('inf')
+        best_recorded_aug_score = float('inf')
+        best_recorded_step = 0
+        best_recorded_state = None
 
         self.model.set_eval_type('softmax')
         self.model.train()
@@ -65,8 +83,30 @@ class TSPTester_EAS(TSPTester_LIB):
 
             tour_lengths = -reward.detach()
             best_len_per_aug = tour_lengths.min(dim=1).values
-            best_no_aug_score = min(best_no_aug_score, float(best_len_per_aug[0].item()))
-            best_aug_score = min(best_aug_score, float(best_len_per_aug.min().item()))
+            sampled_no_aug_score = float(best_len_per_aug[0].item())
+            sampled_aug_score = float(best_len_per_aug.min().item())
+            best_no_aug_score = min(best_no_aug_score, sampled_no_aug_score)
+            best_aug_score = min(best_aug_score, sampled_aug_score)
+
+            should_record = ((step + 1) % record_interval == 0) or ((step + 1) == eas_steps)
+            if should_record and self._is_better_candidate(
+                no_aug_score=sampled_no_aug_score,
+                aug_score=sampled_aug_score,
+                best_no_aug_score=best_recorded_no_aug_score,
+                best_aug_score=best_recorded_aug_score,
+            ):
+                best_recorded_no_aug_score = sampled_no_aug_score
+                best_recorded_aug_score = sampled_aug_score
+                best_recorded_step = step + 1
+                best_recorded_state = copy.deepcopy(self.model.state_dict())
+                self.logger.info(
+                    "EAS candidate updated at step {}/{}: sampled_no_aug {:.3f}, sampled_aug {:.3f}".format(
+                        step + 1,
+                        eas_steps,
+                        sampled_no_aug_score,
+                        sampled_aug_score,
+                    )
+                )
 
             if (step + 1) == 1 or (step + 1) == eas_steps or (step + 1) % log_interval == 0:
                 self.logger.info(
@@ -74,11 +114,26 @@ class TSPTester_EAS(TSPTester_LIB):
                         step + 1,
                         eas_steps,
                         loss.item(),
-                        best_len_per_aug[0].item(),
-                        best_len_per_aug.min().item(),
+                        sampled_no_aug_score,
+                        sampled_aug_score,
                     )
                 )
 
+        if best_recorded_state is None:
+            best_recorded_state = copy.deepcopy(self.model.state_dict())
+            best_recorded_no_aug_score = best_no_aug_score
+            best_recorded_aug_score = best_aug_score
+            best_recorded_step = eas_steps
+
+        self.model.load_state_dict(best_recorded_state)
+        self.logger.info(
+            "EAS final inference will use recorded checkpoint at step {}/{}: sampled_no_aug {:.3f}, sampled_aug {:.3f}".format(
+                best_recorded_step,
+                eas_steps,
+                best_recorded_no_aug_score,
+                best_recorded_aug_score,
+            )
+        )
         self.model.set_eval_type(self.base_eval_type)
         self.model.eval()
         return best_no_aug_score, best_aug_score
