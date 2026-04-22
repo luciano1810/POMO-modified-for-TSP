@@ -133,10 +133,43 @@ class TSPPreferenceTrainer:
         if not problem_sizes:
             raise ValueError('curriculum.problem_sizes must not be empty.')
 
-        stage_length = max(1, math.ceil(self.trainer_params['epochs'] / len(problem_sizes)))
-        stage_idx = min((epoch - 1) // stage_length, len(problem_sizes) - 1)
-        stage_start = stage_idx * stage_length + 1
-        stage_end = min(self.trainer_params['epochs'], (stage_idx + 1) * stage_length)
+        stage_epochs = curriculum.get('stage_epochs')
+        if stage_epochs is None:
+            stage_length = max(1, math.ceil(self.trainer_params['epochs'] / len(problem_sizes)))
+            stage_idx = min((epoch - 1) // stage_length, len(problem_sizes) - 1)
+            stage_start = stage_idx * stage_length + 1
+            stage_end = min(self.trainer_params['epochs'], (stage_idx + 1) * stage_length)
+        else:
+            if len(stage_epochs) != len(problem_sizes):
+                raise ValueError(
+                    'curriculum.stage_epochs must have the same length as curriculum.problem_sizes.'
+                )
+            if sum(stage_epochs) != self.trainer_params['epochs']:
+                raise ValueError(
+                    'Sum of curriculum.stage_epochs must equal trainer_params["epochs"].'
+                )
+
+            running_epoch = 0
+            stage_idx = None
+            stage_start = None
+            stage_end = None
+            for candidate_stage_idx, stage_length in enumerate(stage_epochs):
+                if stage_length <= 0:
+                    raise ValueError('curriculum.stage_epochs must contain only positive integers.')
+                candidate_stage_start = running_epoch + 1
+                running_epoch += stage_length
+                candidate_stage_end = running_epoch
+                if epoch <= candidate_stage_end:
+                    stage_idx = candidate_stage_idx
+                    stage_start = candidate_stage_start
+                    stage_end = candidate_stage_end
+                    break
+
+            if stage_idx is None:
+                raise ValueError(
+                    'Epoch {} exceeded configured curriculum stage epochs.'.format(epoch)
+                )
+
         problem_mix_entries = self._build_stage_problem_mix_entries(stage_idx, problem_sizes)
         return {
             'stage_idx': stage_idx,
@@ -321,6 +354,7 @@ class TSPPreferenceTrainer:
                     'scheduler_state_dict': self.scheduler.state_dict(),
                     'result_log': self.result_log.get_raw_data(),
                     'curriculum_problem_sizes': self.trainer_params['curriculum']['problem_sizes'],
+                    'curriculum_stage_epochs': self.trainer_params['curriculum'].get('stage_epochs'),
                     'base_replay_problem_size': self.trainer_params['curriculum']['base_replay_problem_size'],
                     'curriculum_mix_weights': {
                         'current_stage': self.trainer_params['curriculum']['current_stage_mix_weight'],

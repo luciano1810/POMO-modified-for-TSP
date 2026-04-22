@@ -32,6 +32,8 @@ from TSPPreferenceTrainer import TSPPreferenceTrainer as Trainer
 
 DEFAULT_BASE_CHECKPOINT = "./result/saved_tsp100_model2_longTrain/checkpoint-3000.pt"
 DEFAULT_CURRICULUM_SIZES = [150, 200, 300]
+DEFAULT_CURRICULUM_STAGE_EPOCHS = [20, 30, 40]
+DEFAULT_EPOCHS = sum(DEFAULT_CURRICULUM_STAGE_EPOCHS)
 DEFAULT_BASE_REPLAY_PROBLEM_SIZE = 100
 DEFAULT_CURRENT_STAGE_MIX_WEIGHT = 0.7
 DEFAULT_PREVIOUS_STAGE_MIX_WEIGHT = 0.2
@@ -64,6 +66,43 @@ def parse_batch_schedule(schedule_text):
     return schedule
 
 
+def resolve_curriculum_stage_epochs(args):
+    if args.curriculum_stage_epochs is not None:
+        stage_epochs = list(args.curriculum_stage_epochs)
+        if len(stage_epochs) != len(args.curriculum_problem_sizes):
+            raise ValueError(
+                "--curriculum_stage_epochs must have the same length as "
+                "--curriculum_problem_sizes."
+            )
+        if any(stage_epoch <= 0 for stage_epoch in stage_epochs):
+            raise ValueError("--curriculum_stage_epochs must contain only positive integers.")
+        if sum(stage_epochs) != args.epochs:
+            raise ValueError(
+                "--epochs ({}) must match the sum of --curriculum_stage_epochs ({}).".format(
+                    args.epochs,
+                    sum(stage_epochs),
+                )
+            )
+        return stage_epochs
+
+    if (
+        args.curriculum_problem_sizes == DEFAULT_CURRICULUM_SIZES
+        and args.epochs == DEFAULT_EPOCHS
+    ):
+        return list(DEFAULT_CURRICULUM_STAGE_EPOCHS)
+
+    stage_count = len(args.curriculum_problem_sizes)
+    if stage_count == 0:
+        raise ValueError("--curriculum_problem_sizes must not be empty.")
+
+    base_stage_epoch = args.epochs // stage_count
+    remainder = args.epochs % stage_count
+    return [
+        base_stage_epoch + (1 if stage_idx < remainder else 0)
+        for stage_idx in range(stage_count)
+    ]
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
@@ -75,7 +114,7 @@ def build_parser():
                         help="Checkpoint used as both initialization and frozen reference model.")
     parser.add_argument("--resume_checkpoint", default=None,
                         help="Resume an interrupted post-training run from a saved checkpoint.")
-    parser.add_argument("--epochs", type=int, default=60,
+    parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS,
                         help="Number of post-training epochs.")
     parser.add_argument("--train_episodes", type=int, default=2048,
                         help="Number of training episodes per epoch.")
@@ -94,6 +133,16 @@ def build_parser():
         nargs='+',
         default=DEFAULT_CURRICULUM_SIZES,
         help="Problem sizes used by the curriculum in order.",
+    )
+    parser.add_argument(
+        "--curriculum_stage_epochs",
+        type=int,
+        nargs='+',
+        default=None,
+        help=(
+            "Optional per-stage epoch counts aligned with --curriculum_problem_sizes. "
+            "Defaults to 20/30/40 for 150/200/300, otherwise evenly splits --epochs."
+        ),
     )
     parser.add_argument("--base_replay_problem_size", type=int, default=DEFAULT_BASE_REPLAY_PROBLEM_SIZE,
                         help="Base problem size kept as replay throughout post-training.")
@@ -170,6 +219,7 @@ def build_optimizer_params(args):
 
 
 def build_trainer_params(args):
+    curriculum_stage_epochs = resolve_curriculum_stage_epochs(args)
     return {
         'use_cuda': args.use_cuda,
         'cuda_device_num': args.cuda_device_num,
@@ -186,6 +236,7 @@ def build_trainer_params(args):
         'rl_loss_weight': args.rl_loss_weight,
         'curriculum': {
             'problem_sizes': args.curriculum_problem_sizes,
+            'stage_epochs': curriculum_stage_epochs,
             'base_replay_problem_size': args.base_replay_problem_size,
             'current_stage_mix_weight': args.current_stage_mix_weight,
             'previous_stage_mix_weight': args.previous_stage_mix_weight,
@@ -230,9 +281,13 @@ def build_logger_params(args):
 def main():
     args = build_parser().parse_args()
     if args.debug:
-        args.epochs = 4
         args.train_episodes = 64
         args.curriculum_problem_sizes = args.curriculum_problem_sizes[:2]
+        if args.curriculum_stage_epochs is not None:
+            args.curriculum_stage_epochs = args.curriculum_stage_epochs[:2]
+            args.epochs = sum(args.curriculum_stage_epochs)
+        else:
+            args.epochs = 4
 
     env_params = build_env_params(args)
     model_params = build_model_params()
@@ -262,7 +317,8 @@ def _print_config(args, env_params, model_params, optimizer_params, trainer_para
     logger.info('trainer_params{}'.format(trainer_params))
     logger.info(
         'Preference post-training uses a frozen reference checkpoint, top-k vs bottom-k '
-        'multi-pair preference supervision, a 60-epoch mixed-replay curriculum over 150/200/300 by default, '
+        'multi-pair preference supervision, a 90-epoch mixed-replay curriculum over 150/200/300 by default '
+        '(20/30/40 epochs per stage), '
         'and reward-gap weighted preference loss.'
     )
 

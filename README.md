@@ -160,7 +160,7 @@ python test_eas.py \
 cd TSP/POMO
 python test_eas.py \
   --data_path ../data/val \
-  --checkpoint_path /path/to/your/checkpoint.pt \
+  --checkpoint_path /home/shaoyw1810/桌面/Projects/SDM-5031-2026-Spring/TSP/POMO/result/20260422_214408_post_train__pref__curriculum_150_200_300/checkpoint-90.pt \
   --augmentation_enable true \
   --aug_factor 8 \
   --eas_steps 100 \
@@ -173,7 +173,7 @@ python test_eas.py \
 cd TSP/POMO
 python post_train_preference.py \
   --base_checkpoint ./result/saved_tsp100_model2_longTrain/checkpoint-3000.pt \
-  --epochs 60 \
+  --epochs 90 \
   --preference_pair_k 4 \
   --curriculum_problem_sizes 150 200 300
 ```
@@ -182,7 +182,7 @@ python post_train_preference.py \
 
 - 载入已有 checkpoint 作为初始化模型和冻结 reference model
 - 用 `top-k vs bottom-k` 的多对偏好 supervision 做 DPO 风格 preference loss，再叠加少量原始 RL loss 保稳定
-- 用 `当前阶段 70% + 上一阶段 20% + 基础 100 节点 replay 10%` 的 mixed replay curriculum，默认在 `60` 个 epoch 内覆盖 `150/200/300`
+- 用 `当前阶段 70% + 上一阶段 20% + 基础 100 节点 replay 10%` 的 mixed replay curriculum，默认按 `150:20 epoch -> 200:30 epoch -> 300:40 epoch`，共 `90` 个 epoch
 - 默认把当前策略 rollout 和冻结 reference model 的 sampled rollout 合并成 preference candidate pool，并按 chosen-vs-rejected 的 reward gap 加权 preference loss
 
 其中默认 `preference_pair_k = 4`，也就是同一实例内取前 `4` 条 shortest sampled tours 和后 `4` 条 longest sampled tours，构造多组偏好对；如果你想退化回原来的单对偏好，可以设成：

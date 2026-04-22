@@ -7,6 +7,7 @@ venv/
 TSP/POMO/result/*
 !TSP/POMO/result/saved_tsp100_model2_longTrain/
 !TSP/POMO/result/saved_tsp100_model2_longTrain/checkpoint-3000.pt
+!TSP/POMO/result/20260422_214408_post_train__pref__curriculum_150_200_300/
 TSP/POMO/result_lib/
 
 NEW_py_ver/TSP/data/tsplib/*
