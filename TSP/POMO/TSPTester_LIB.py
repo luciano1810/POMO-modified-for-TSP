@@ -322,10 +322,19 @@ class TSPTester_LIB:
             device=env.problems.device,
         )
 
-    def _evaluate(self, env: Env) -> Tuple[float, float]:
+    def _evaluate(
+        self,
+        env: Env,
+        num_samples: Optional[int] = None,
+        enable_2opt: Optional[bool] = None,
+    ) -> Tuple[float, float]:
         self.model.eval()
-        num_samples = max(1, int(self.tester_params.get('num_samples', 1)))
-        enable_2opt = self.tester_params.get('enable_2opt', False)
+        if num_samples is None:
+            num_samples = self.tester_params.get('num_samples', 1)
+        if enable_2opt is None:
+            enable_2opt = self.tester_params.get('enable_2opt', False)
+
+        num_samples = max(1, int(num_samples))
         dist_matrix = None
         if enable_2opt:
             dist_matrix = _compute_dist_matrix(env.original_node_xy_lib[0], env.edge_weight_type)

@@ -51,6 +51,14 @@ DEFAULT_EAS_STEPS = 100
 DEFAULT_EAS_PARAM_GROUP = "embedding"
 DEFAULT_EAS_RECORD_INTERVAL = 10
 DEFAULT_EAS_LOG_INTERVAL = 20
+DEFAULT_EAS_OPTIMIZER = "adam"
+DEFAULT_EAS_WEIGHT_DECAY = 0.0
+DEFAULT_EAS_MOMENTUM = 0.0
+DEFAULT_EAS_GRAD_CLIP = 1.0
+DEFAULT_EAS_PATIENCE = 2
+DEFAULT_EAS_RESTARTS = 2
+DEFAULT_EAS_LOSS_TYPE = "reinforce"
+DEFAULT_EAS_ELITE_RATIO = 0.25
 
 MODEL_PARAMS = {
     "embedding_dim": 128,
@@ -161,7 +169,7 @@ def build_parser():
         "--eas_steps",
         type=int,
         default=DEFAULT_EAS_STEPS,
-        help="Number of SGD updates used by EAS on each test instance.",
+        help="Total number of EAS updates budgeted for each test instance.",
     )
     parser.add_argument(
         "--eas_train_lr_reference",
@@ -173,11 +181,66 @@ def build_parser():
         "--eas_lr",
         type=float,
         default=None,
-        help="Explicit EAS SGD learning rate. Defaults to --eas_train_lr_reference / 10.",
+        help="Explicit EAS learning rate. Defaults to --eas_train_lr_reference / 10.",
+    )
+    parser.add_argument(
+        "--eas_optimizer",
+        choices=["sgd", "adam", "adamw"],
+        default=DEFAULT_EAS_OPTIMIZER,
+        help="Optimizer used inside EAS test-time adaptation.",
+    )
+    parser.add_argument(
+        "--eas_weight_decay",
+        type=float,
+        default=DEFAULT_EAS_WEIGHT_DECAY,
+        help="Weight decay applied by the EAS optimizer.",
+    )
+    parser.add_argument(
+        "--eas_momentum",
+        type=float,
+        default=DEFAULT_EAS_MOMENTUM,
+        help="Momentum used when --eas_optimizer=sgd.",
+    )
+    parser.add_argument(
+        "--eas_grad_clip",
+        type=float,
+        default=DEFAULT_EAS_GRAD_CLIP,
+        help="Gradient clipping threshold for EAS updates; <=0 disables clipping.",
+    )
+    parser.add_argument(
+        "--eas_patience",
+        type=int,
+        default=DEFAULT_EAS_PATIENCE,
+        help="Early-stop an EAS restart after this many recorded checkpoints without improvement; 0 disables it.",
+    )
+    parser.add_argument(
+        "--eas_restarts",
+        type=int,
+        default=DEFAULT_EAS_RESTARTS,
+        help="Split the total EAS update budget across multiple short restarts from the base checkpoint.",
+    )
+    parser.add_argument(
+        "--eas_loss_type",
+        choices=["reinforce", "elite_reinforce"],
+        default=DEFAULT_EAS_LOSS_TYPE,
+        help="Instance-level policy-gradient objective used during EAS.",
+    )
+    parser.add_argument(
+        "--eas_elite_ratio",
+        type=float,
+        default=DEFAULT_EAS_ELITE_RATIO,
+        help="Fraction of tours kept when --eas_loss_type=elite_reinforce.",
     )
     parser.add_argument(
         "--eas_param_group",
-        choices=["embedding", "decoder_last", "embedding_decoder"],
+        choices=[
+            "embedding",
+            "decoder_wq_last",
+            "decoder_combine",
+            "decoder_last",
+            "encoder_first2",
+            "embedding_decoder",
+        ],
         default=DEFAULT_EAS_PARAM_GROUP,
         help="Small parameter subset to fine-tune for each test instance.",
     )
@@ -193,6 +256,18 @@ def build_parser():
         default=DEFAULT_EAS_LOG_INTERVAL,
         help="How often to log intermediate EAS updates.",
     )
+    parser.add_argument(
+        "--eas_selection_num_samples",
+        type=int,
+        default=None,
+        help="Number of re-decode samples used to score recorded EAS checkpoints. Defaults to --num_samples.",
+    )
+    parser.add_argument(
+        "--eas_selection_enable_2opt",
+        type=str2bool,
+        default=None,
+        help="Whether recorded EAS checkpoints are scored with 2-opt. Defaults to --enable_2opt.",
+    )
     return parser
 
 
@@ -207,6 +282,14 @@ def build_tester_params(args):
     if eas_lr is None:
         eas_lr = args.eas_train_lr_reference / 10
 
+    selection_num_samples = args.eas_selection_num_samples
+    if selection_num_samples is None:
+        selection_num_samples = max(1, args.num_samples)
+
+    selection_enable_2opt = args.eas_selection_enable_2opt
+    if selection_enable_2opt is None:
+        selection_enable_2opt = args.enable_2opt
+
     return {
         "use_cuda": args.use_cuda,
         "cuda_device_num": args.cuda_device_num,
@@ -220,9 +303,19 @@ def build_tester_params(args):
         "scale_range_all": [[args.scale_min, args.scale_max]],
         "eas_steps": args.eas_steps,
         "eas_lr": eas_lr,
+        "eas_optimizer": args.eas_optimizer,
+        "eas_weight_decay": args.eas_weight_decay,
+        "eas_momentum": args.eas_momentum,
+        "eas_grad_clip": args.eas_grad_clip,
+        "eas_patience": max(0, args.eas_patience),
+        "eas_restarts": max(1, args.eas_restarts),
+        "eas_loss_type": args.eas_loss_type,
+        "eas_elite_ratio": args.eas_elite_ratio,
         "eas_param_group": args.eas_param_group,
         "eas_record_interval": max(1, args.eas_record_interval),
-        "eas_log_interval": args.eas_log_interval,
+        "eas_log_interval": max(1, args.eas_log_interval),
+        "eas_selection_num_samples": max(1, selection_num_samples),
+        "eas_selection_enable_2opt": selection_enable_2opt,
         "eas_train_lr_reference": args.eas_train_lr_reference,
     }
 
@@ -233,6 +326,9 @@ def build_logger_params(tester_params):
     else:
         highlight = "no_aug"
     highlight = f"{highlight}_eas{tester_params['eas_steps']}_{tester_params['eas_param_group']}"
+    highlight = f"{highlight}_{tester_params['eas_optimizer']}"
+    if tester_params["eas_restarts"] > 1:
+        highlight = f"{highlight}_r{tester_params['eas_restarts']}"
     highlight = f"{highlight}_sample{tester_params['num_samples']}"
     if tester_params["enable_2opt"]:
         highlight = f"{highlight}_2opt"
@@ -260,8 +356,17 @@ def build_result_payload(tester_params, result):
         "enable_2opt": tester_params["enable_2opt"],
         "eas_steps": tester_params["eas_steps"],
         "eas_lr": tester_params["eas_lr"],
+        "eas_optimizer": tester_params["eas_optimizer"],
+        "eas_weight_decay": tester_params["eas_weight_decay"],
+        "eas_grad_clip": tester_params["eas_grad_clip"],
+        "eas_patience": tester_params["eas_patience"],
+        "eas_restarts": tester_params["eas_restarts"],
+        "eas_loss_type": tester_params["eas_loss_type"],
+        "eas_elite_ratio": tester_params["eas_elite_ratio"],
         "eas_param_group": tester_params["eas_param_group"],
         "eas_record_interval": tester_params["eas_record_interval"],
+        "eas_selection_num_samples": tester_params["eas_selection_num_samples"],
+        "eas_selection_enable_2opt": tester_params["eas_selection_enable_2opt"],
         "checkpoint_path": tester_params["checkpoint_path"],
         "data_path": tester_params["filename"],
         "solved_instance_num": result.solved_instance_num,
@@ -322,8 +427,25 @@ def _print_config(args, tester_params):
         "unless --eas_lr is explicitly provided."
     )
     logger.info(
-        "EAS candidate selection: record every {} updates and use the best recorded checkpoint for final inference.".format(
+        "EAS optimizer config: optimizer={}, restarts={}, grad_clip={}, patience={}".format(
+            tester_params["eas_optimizer"],
+            tester_params["eas_restarts"],
+            tester_params["eas_grad_clip"],
+            tester_params["eas_patience"],
+        )
+    )
+    logger.info(
+        "EAS loss config: loss_type={}, elite_ratio={}".format(
+            tester_params["eas_loss_type"],
+            tester_params["eas_elite_ratio"],
+        )
+    )
+    logger.info(
+        "EAS candidate selection: record every {} updates, score checkpoints with num_samples={}, "
+        "enable_2opt={}, and use the best recorded checkpoint for final inference.".format(
             tester_params["eas_record_interval"],
+            tester_params["eas_selection_num_samples"],
+            tester_params["eas_selection_enable_2opt"],
         )
     )
     logger.info(

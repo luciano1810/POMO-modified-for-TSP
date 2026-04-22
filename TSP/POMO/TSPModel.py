@@ -24,14 +24,25 @@ class TSPModel(nn.Module):
         self.model_params['eval_type'] = eval_type
 
     def get_eas_parameters(self, target):
+        encoder_first2 = [
+            (f'encoder.layers.{layer_idx}', layer)
+            for layer_idx, layer in enumerate(self.encoder.layers[:2])
+        ]
         group_specs = {
             'embedding': [
                 ('encoder.embedding', self.encoder.embedding),
+            ],
+            'decoder_wq_last': [
+                ('decoder.Wq_last', self.decoder.Wq_last),
+            ],
+            'decoder_combine': [
+                ('decoder.multi_head_combine', self.decoder.multi_head_combine),
             ],
             'decoder_last': [
                 ('decoder.Wq_last', self.decoder.Wq_last),
                 ('decoder.multi_head_combine', self.decoder.multi_head_combine),
             ],
+            'encoder_first2': encoder_first2,
             'embedding_decoder': [
                 ('encoder.embedding', self.encoder.embedding),
                 ('decoder.Wq_last', self.decoder.Wq_last),
