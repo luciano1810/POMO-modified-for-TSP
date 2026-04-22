@@ -229,6 +229,8 @@ python post_train_preference.py \
 - scheduler state
 - 已有训练日志和 epoch 计数
 
+`resume` 现在会严格从中断时保存的 `reference_model_state_dict` 恢复 reference，不会再回退到 `--base_checkpoint`。这样可以保证恢复训练前后使用的是同一份冻结 reference。
+
 ## Suggested Project Workflow
 
 1. 先运行 baseline，记录公开验证集上的 `avg_aug_gap` 和逐实例 `aug_gap`。

@@ -85,9 +85,11 @@ class TSPPreferenceTrainer:
 
         reference_model_state_dict = checkpoint.get('reference_model_state_dict')
         if reference_model_state_dict is None:
-            model_load = self.trainer_params['model_load']
-            base_checkpoint = torch.load(model_load['path'], map_location=self.device)
-            reference_model_state_dict = base_checkpoint['model_state_dict']
+            raise KeyError(
+                'resume checkpoint is missing reference_model_state_dict: {}. '
+                'Refusing to fall back to base_checkpoint because resume must preserve '
+                'the exact frozen reference used before interruption.'.format(checkpoint_path)
+            )
         self.reference_model.load_state_dict(reference_model_state_dict)
 
         if 'optimizer_state_dict' in checkpoint:
@@ -224,6 +226,7 @@ class TSPPreferenceTrainer:
                     'epoch': epoch,
                     'model_state_dict': self.model.state_dict(),
                     'reference_model_state_dict': self.reference_model.state_dict(),
+                    'reference_is_frozen_from_run_start': True,
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'scheduler_state_dict': self.scheduler.state_dict(),
                     'result_log': self.result_log.get_raw_data(),
