@@ -210,6 +210,25 @@ python post_train_preference.py \
   --batch_schedule 150:16,200:12,300:8,500:2
 ```
 
+如果训练在中途停止，例如跑到 `checkpoint-50.pt` 后因为显存问题中断，可以从该 checkpoint 继续训练：
+
+```bash
+python post_train_preference.py \
+  --base_checkpoint ./result/saved_tsp100_model2_longTrain/checkpoint-3000.pt \
+  --resume_checkpoint /path/to/checkpoint-50.pt \
+  --epochs 100 \
+  --min_train_batch_size 1 \
+  --batch_schedule 150:16,200:12,300:4,500:1
+```
+
+这会恢复：
+
+- 当前模型参数
+- 冻结 reference model
+- optimizer state
+- scheduler state
+- 已有训练日志和 epoch 计数
+
 ## Suggested Project Workflow
 
 1. 先运行 baseline，记录公开验证集上的 `avg_aug_gap` 和逐实例 `aug_gap`。

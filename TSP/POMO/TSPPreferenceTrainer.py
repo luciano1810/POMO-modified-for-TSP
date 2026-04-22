@@ -47,7 +47,7 @@ class TSPPreferenceTrainer:
         self.scheduler = Scheduler(self.optimizer, **self.optimizer_params['scheduler'])
 
         self.start_epoch = 1
-        self._load_reference_checkpoint()
+        self._load_initial_states()
         self._freeze_reference_model()
 
         self.logger.info(
@@ -58,10 +58,15 @@ class TSPPreferenceTrainer:
 
         self.time_estimator = TimeEstimator()
 
-    def _load_reference_checkpoint(self):
+    def _load_initial_states(self):
         model_load = self.trainer_params['model_load']
         if not model_load.get('enable', False):
             raise ValueError('Preference post-training requires model_load.enable=True.')
+
+        resume_load = self.trainer_params.get('resume_load', {})
+        if resume_load.get('enable', False):
+            self._resume_from_checkpoint(resume_load['path'])
+            return
 
         checkpoint_fullname = model_load['path']
         checkpoint = torch.load(checkpoint_fullname, map_location=self.device)
@@ -72,6 +77,39 @@ class TSPPreferenceTrainer:
         total = sum(param.nelement() for param in self.model.parameters())
         self.logger.info('Reference checkpoint loaded from: {}'.format(checkpoint_fullname))
         self.logger.info('Number of parameters: %.2fM' % (total / 1e6))
+
+    def _resume_from_checkpoint(self, checkpoint_path):
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+
+        reference_model_state_dict = checkpoint.get('reference_model_state_dict')
+        if reference_model_state_dict is None:
+            model_load = self.trainer_params['model_load']
+            base_checkpoint = torch.load(model_load['path'], map_location=self.device)
+            reference_model_state_dict = base_checkpoint['model_state_dict']
+        self.reference_model.load_state_dict(reference_model_state_dict)
+
+        if 'optimizer_state_dict' in checkpoint:
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            self._move_optimizer_state_to_device()
+        if 'scheduler_state_dict' in checkpoint:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        if 'result_log' in checkpoint:
+            self.result_log.set_raw_data(checkpoint['result_log'])
+
+        self.start_epoch = int(checkpoint['epoch']) + 1
+
+        total = sum(param.nelement() for param in self.model.parameters())
+        self.logger.info('Resumed post-training checkpoint from: {}'.format(checkpoint_path))
+        self.logger.info('Resume start epoch: {}'.format(self.start_epoch))
+        self.logger.info('Number of parameters: %.2fM' % (total / 1e6))
+
+    def _move_optimizer_state_to_device(self):
+        for state in self.optimizer.state.values():
+            for key, value in state.items():
+                if torch.is_tensor(value):
+                    state[key] = value.to(self.device)
 
     def _freeze_reference_model(self):
         self.reference_model.eval()

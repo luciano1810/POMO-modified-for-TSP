@@ -69,6 +69,8 @@ def build_parser():
     )
     parser.add_argument("--base_checkpoint", default=DEFAULT_BASE_CHECKPOINT,
                         help="Checkpoint used as both initialization and frozen reference model.")
+    parser.add_argument("--resume_checkpoint", default=None,
+                        help="Resume an interrupted post-training run from a saved checkpoint.")
     parser.add_argument("--epochs", type=int, default=100,
                         help="Number of post-training epochs.")
     parser.add_argument("--train_episodes", type=int, default=2048,
@@ -182,6 +184,10 @@ def build_trainer_params(args):
         'model_load': {
             'enable': True,
             'path': os.path.abspath(args.base_checkpoint),
+        },
+        'resume_load': {
+            'enable': args.resume_checkpoint is not None,
+            'path': os.path.abspath(args.resume_checkpoint) if args.resume_checkpoint is not None else None,
         }
     }
 
