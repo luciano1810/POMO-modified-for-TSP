@@ -106,7 +106,7 @@ class TSPTester_EAS(TSPTester_LIB):
         no_aug_score = min(no_aug_score, eas_no_aug_score)
         aug_score = min(aug_score, eas_aug_score)
         self.logger.info(
-            "EAS incumbent best merged with greedy eval: no_aug {:.3f}, aug {:.3f}".format(
+            "EAS incumbent best merged with post-EAS eval: no_aug {:.3f}, aug {:.3f}".format(
                 no_aug_score,
                 aug_score,
             )

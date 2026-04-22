@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
 
-from TSPEnv import TSPEnv as Env
+from TSPEnv import TSPEnv as Env, Step_State
 from TSPModel import TSPModel as Model
 
 from TSProblemDef import augment_xy_data_by_8_fold
@@ -23,6 +23,50 @@ def _normalize_to_unit_square(node_xy: torch.Tensor) -> torch.Tensor:
     ratio = torch.max((xy_max - xy_min), dim=-1, keepdim=True).values
     ratio[ratio == 0] = 1
     return (node_xy - xy_min) / ratio.expand(-1, 1, 2)
+
+
+def _compute_dist_matrix(coords: torch.Tensor, edge_weight_type: str = 'EUC_2D'):
+    diff = coords.unsqueeze(0) - coords.unsqueeze(1)
+    dists = (diff ** 2).sum(dim=2).sqrt()
+    if edge_weight_type == 'CEIL_2D':
+        dists = torch.ceil(dists)
+    elif edge_weight_type == 'EUC_2D':
+        dists = torch.floor(dists + 0.5)
+    return dists.detach().cpu().tolist()
+
+
+def _two_opt(tour, dist_matrix, max_iter: int = 10000):
+    tour = list(tour)
+    n = len(tour)
+    improved = True
+    iter_count = 0
+
+    while improved and iter_count < max_iter:
+        improved = False
+        for i in range(1, n - 1):
+            for j in range(i + 1, n):
+                a, b = tour[i - 1], tour[i]
+                c, d = tour[j], tour[(j + 1) % n]
+                delta = (
+                    dist_matrix[a][c]
+                    + dist_matrix[b][d]
+                    - dist_matrix[a][b]
+                    - dist_matrix[c][d]
+                )
+                if delta < -1e-6:
+                    tour[i:j + 1] = reversed(tour[i:j + 1])
+                    improved = True
+                    break
+            if improved:
+                break
+        iter_count += 1
+
+    return tour
+
+
+def _tour_length(tour, dist_matrix):
+    n = len(tour)
+    return sum(dist_matrix[tour[i]][tour[(i + 1) % n]] for i in range(n))
 
 
 @dataclass
@@ -264,15 +308,65 @@ class TSPTester_LIB:
             prob_tensor = torch.cat(prob_list, dim=2)
         return reward, prob_tensor
 
-    def _evaluate(self, env: Env) -> Tuple[float, float]:
-        self.model.set_eval_type(self.base_eval_type)
-        self.model.eval()
-        reward, _ = self._rollout(env, collect_prob=False, lib_mode=True, no_grad=True)
+    def _reset_env_for_redecode(self, env: Env):
+        env.selected_count = 0
+        env.current_node = None
+        env.selected_node_list = torch.zeros(
+            (env.batch_size, env.pomo_size, 0),
+            dtype=torch.long,
+            device=env.problems.device,
+        )
+        env.step_state = Step_State(BATCH_IDX=env.BATCH_IDX, POMO_IDX=env.POMO_IDX)
+        env.step_state.ninf_mask = torch.zeros(
+            (env.batch_size, env.pomo_size, env.problem_size),
+            device=env.problems.device,
+        )
 
-        tour_lengths = -reward
-        best_len_per_aug = tour_lengths.min(dim=1).values
-        no_aug_score = best_len_per_aug[0].item()
-        aug_score = best_len_per_aug.min(dim=0).values.item()
+    def _evaluate(self, env: Env) -> Tuple[float, float]:
+        self.model.eval()
+        num_samples = max(1, int(self.tester_params.get('num_samples', 1)))
+        enable_2opt = self.tester_params.get('enable_2opt', False)
+        dist_matrix = None
+        if enable_2opt:
+            dist_matrix = _compute_dist_matrix(env.original_node_xy_lib[0], env.edge_weight_type)
+
+        all_sample_best = []
+        saved_eval_type = self.model.model_params['eval_type']
+
+        with torch.no_grad():
+            reset_state, _, _ = env.reset()
+            self.model.pre_forward(reset_state)
+
+            for sample_id in range(num_samples):
+                self.model.set_eval_type(
+                    'softmax' if num_samples > 1 and sample_id < num_samples - 1 else 'argmax'
+                )
+                self._reset_env_for_redecode(env)
+
+                state, reward, done = env.pre_step()
+                while not done:
+                    selected, _ = self.model(state)
+                    state, reward, done = env.step(selected, lib_mode=True)
+
+                tour_lengths = -reward
+                if enable_2opt:
+                    batch_best_lengths = []
+                    best_pomo_idx = tour_lengths.argmin(dim=1)
+                    for batch_idx in range(env.batch_size):
+                        tour = env.selected_node_list[batch_idx, best_pomo_idx[batch_idx].item()]
+                        optimized_tour = _two_opt(tour.detach().cpu().tolist(), dist_matrix)
+                        batch_best_lengths.append(_tour_length(optimized_tour, dist_matrix))
+                    best_scores = torch.tensor(batch_best_lengths, dtype=torch.float32)
+                else:
+                    best_scores = tour_lengths.min(dim=1).values.detach().cpu()
+
+                all_sample_best.append(best_scores)
+
+        self.model.set_eval_type(saved_eval_type)
+
+        all_sample_best = torch.stack(all_sample_best, dim=0)
+        no_aug_score = all_sample_best[:, 0].min().item()
+        aug_score = all_sample_best.min().item()
         return float(no_aug_score), float(aug_score)
 
     def _test_one_instance(self, nodes_xy_normalized: torch.Tensor, coords_orig: torch.Tensor, ew_type: str) -> Tuple[float, float]:

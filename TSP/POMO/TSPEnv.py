@@ -73,13 +73,21 @@ class TSPEnv:
     def reset(self):
         self.selected_count = 0
         self.current_node = None
+        device = self.problems.device
         # shape: (batch, pomo)
-        self.selected_node_list = torch.zeros((self.batch_size, self.pomo_size, 0), dtype=torch.long)
+        self.selected_node_list = torch.zeros(
+            (self.batch_size, self.pomo_size, 0),
+            dtype=torch.long,
+            device=device,
+        )
         # shape: (batch, pomo, 0~problem)
 
         # CREATE STEP STATE
         self.step_state = Step_State(BATCH_IDX=self.BATCH_IDX, POMO_IDX=self.POMO_IDX)
-        self.step_state.ninf_mask = torch.zeros((self.batch_size, self.pomo_size, self.problem_size))
+        self.step_state.ninf_mask = torch.zeros(
+            (self.batch_size, self.pomo_size, self.problem_size),
+            device=device,
+        )
         # shape: (batch, pomo, problem)
 
         reward = None
@@ -152,4 +160,3 @@ class TSPEnv:
         travel_distances = segment_lengths.sum(2)
         # shape: (batch, pomo)
         return travel_distances
-

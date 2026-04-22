@@ -43,6 +43,8 @@ DEFAULT_MODEL_DIR = "./result/saved_tsp100_model2_longTrain"
 DEFAULT_MODEL_EPOCH = 3000
 DEFAULT_AUGMENTATION_ENABLE = True
 DEFAULT_AUG_FACTOR = 8
+DEFAULT_NUM_SAMPLES = 8
+DEFAULT_ENABLE_2OPT = True
 DEFAULT_DETAILED_LOG = True
 DEFAULT_TRAIN_LR_REFERENCE = 1e-4
 DEFAULT_EAS_STEPS = 100
@@ -113,6 +115,18 @@ def build_parser():
         help="Enable test-time augmentation before EAS.",
     )
     parser.add_argument("--aug_factor", type=int, default=DEFAULT_AUG_FACTOR, help="Augmentation factor.")
+    parser.add_argument(
+        "--num_samples",
+        type=int,
+        default=DEFAULT_NUM_SAMPLES,
+        help="Number of sampled decoding rounds in the final post-EAS evaluation (1 = greedy only).",
+    )
+    parser.add_argument(
+        "--enable_2opt",
+        type=str2bool,
+        default=DEFAULT_ENABLE_2OPT,
+        help="Enable 2-opt local search in the final post-EAS evaluation.",
+    )
     parser.add_argument(
         "--detailed_log",
         type=str2bool,
@@ -193,6 +207,8 @@ def build_tester_params(args):
         "filename": os.path.abspath(args.data_path),
         "augmentation_enable": args.augmentation_enable,
         "aug_factor": args.aug_factor,
+        "num_samples": max(1, args.num_samples),
+        "enable_2opt": args.enable_2opt,
         "detailed_log": args.detailed_log,
         "scale_range_all": [[args.scale_min, args.scale_max]],
         "eas_steps": args.eas_steps,
@@ -209,6 +225,9 @@ def build_logger_params(tester_params):
     else:
         highlight = "no_aug"
     highlight = f"{highlight}_eas{tester_params['eas_steps']}_{tester_params['eas_param_group']}"
+    highlight = f"{highlight}_sample{tester_params['num_samples']}"
+    if tester_params["enable_2opt"]:
+        highlight = f"{highlight}_2opt"
 
     process_start_time = datetime.now(pytz.timezone("Asia/Shanghai"))
     return {
@@ -229,6 +248,8 @@ def build_result_payload(tester_params, result):
         "avg_no_aug_gap": result.avg_no_aug_gap,
         "augmentation_enable": tester_params["augmentation_enable"],
         "aug_factor": tester_params["aug_factor"],
+        "num_samples": tester_params["num_samples"],
+        "enable_2opt": tester_params["enable_2opt"],
         "eas_steps": tester_params["eas_steps"],
         "eas_lr": tester_params["eas_lr"],
         "eas_param_group": tester_params["eas_param_group"],
@@ -290,6 +311,13 @@ def _print_config(args, tester_params):
     logger.info(
         "EAS default LR policy: eas_lr = eas_train_lr_reference / 10 "
         "unless --eas_lr is explicitly provided."
+    )
+    logger.info(
+        "Final post-EAS test strategy: num_samples={}, enable_2opt={} "
+        "(first N-1 rounds use softmax sampling, last round uses argmax).".format(
+            tester_params["num_samples"],
+            tester_params["enable_2opt"],
+        )
     )
     logger.info(
         "Primary metric for EAS evaluation: avg_aug_gap "
