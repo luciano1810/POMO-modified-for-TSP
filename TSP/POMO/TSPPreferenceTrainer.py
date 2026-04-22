@@ -55,6 +55,15 @@ class TSPPreferenceTrainer:
                 self.trainer_params['preference_pair_k']
             )
         )
+        if self.trainer_params['use_reference_candidate_pool']:
+            self.logger.info('Preference candidate pool: current-policy rollouts + sampled reference-policy rollouts.')
+        else:
+            self.logger.info('Preference candidate pool: current-policy rollouts only.')
+        self.logger.info(
+            'Preference gap weighting enabled with normalized_gap^{}.'.format(
+                self.trainer_params['preference_gap_weight_power']
+            )
+        )
 
         self.time_estimator = TimeEstimator()
 
@@ -128,12 +137,92 @@ class TSPPreferenceTrainer:
         stage_idx = min((epoch - 1) // stage_length, len(problem_sizes) - 1)
         stage_start = stage_idx * stage_length + 1
         stage_end = min(self.trainer_params['epochs'], (stage_idx + 1) * stage_length)
+        problem_mix_entries = self._build_stage_problem_mix_entries(stage_idx, problem_sizes)
         return {
             'stage_idx': stage_idx,
             'problem_size': problem_sizes[stage_idx],
             'stage_start': stage_start,
             'stage_end': stage_end,
+            'problem_mix_entries': problem_mix_entries,
         }
+
+    def _build_stage_problem_mix_entries(self, stage_idx, problem_sizes):
+        curriculum = self.trainer_params['curriculum']
+        raw_entries = [
+            (problem_sizes[stage_idx], curriculum['current_stage_mix_weight']),
+            (curriculum['base_replay_problem_size'], curriculum['base_replay_mix_weight']),
+        ]
+        if stage_idx > 0:
+            raw_entries.append((problem_sizes[stage_idx - 1], curriculum['previous_stage_mix_weight']))
+
+        combined_weights = {}
+        order = []
+        for problem_size, weight in raw_entries:
+            if weight <= 0:
+                continue
+            if problem_size not in combined_weights:
+                combined_weights[problem_size] = 0.0
+                order.append(problem_size)
+            combined_weights[problem_size] += weight
+
+        total_weight = sum(combined_weights.values())
+        if total_weight <= 0:
+            raise ValueError('Curriculum replay weights must sum to a positive value.')
+
+        return [
+            (problem_size, combined_weights[problem_size] / total_weight)
+            for problem_size in order
+        ]
+
+    @staticmethod
+    def _format_problem_mix_entries(problem_mix_entries):
+        return ', '.join(
+            '{}:{:.1f}%'.format(problem_size, mix_weight * 100.0)
+            for problem_size, mix_weight in problem_mix_entries
+        )
+
+    @staticmethod
+    def _allocate_episode_targets(train_num_episode, problem_mix_entries):
+        raw_targets = {
+            problem_size: train_num_episode * mix_weight
+            for problem_size, mix_weight in problem_mix_entries
+        }
+        episode_targets = {
+            problem_size: int(math.floor(raw_target))
+            for problem_size, raw_target in raw_targets.items()
+        }
+
+        remaining = train_num_episode - sum(episode_targets.values())
+        if remaining > 0:
+            ordered_problem_sizes = sorted(
+                raw_targets.keys(),
+                key=lambda problem_size: (
+                    raw_targets[problem_size] - episode_targets[problem_size],
+                    raw_targets[problem_size],
+                ),
+                reverse=True,
+            )
+            for idx in range(remaining):
+                episode_targets[ordered_problem_sizes[idx % len(ordered_problem_sizes)]] += 1
+
+        return episode_targets
+
+    @staticmethod
+    def _select_next_problem_size(episode_targets, episode_done_by_size):
+        active_problem_sizes = [
+            problem_size for problem_size, target in episode_targets.items()
+            if episode_done_by_size[problem_size] < target
+        ]
+        if not active_problem_sizes:
+            raise RuntimeError('No active problem sizes remain for the current epoch.')
+
+        return max(
+            active_problem_sizes,
+            key=lambda problem_size: (
+                (episode_targets[problem_size] - episode_done_by_size[problem_size]) / max(1, episode_targets[problem_size]),
+                episode_targets[problem_size] - episode_done_by_size[problem_size],
+            ),
+        )
 
     def _get_train_batch_size(self, problem_size):
         batch_schedule = self.trainer_params.get('train_batch_size_by_problem_size')
@@ -179,17 +268,18 @@ class TSPPreferenceTrainer:
             stage_info = self._get_curriculum_stage_info(epoch)
             problem_size = stage_info['problem_size']
             self.logger.info(
-                'Epoch {:3d}: curriculum stage {}/{} -> problem_size={} (epochs {}-{})'.format(
+                'Epoch {:3d}: curriculum stage {}/{} -> problem_size={} (epochs {}-{}), mix=[{}]'.format(
                     epoch,
                     stage_info['stage_idx'] + 1,
                     len(self.trainer_params['curriculum']['problem_sizes']),
                     problem_size,
                     stage_info['stage_start'],
                     stage_info['stage_end'],
+                    self._format_problem_mix_entries(stage_info['problem_mix_entries']),
                 )
             )
 
-            train_score, train_loss, train_pref_loss, train_rl_loss = self._train_one_epoch(epoch, problem_size)
+            train_score, train_loss, train_pref_loss, train_rl_loss = self._train_one_epoch(epoch, stage_info)
             self.result_log.append('train_score', epoch, train_score)
             self.result_log.append('train_loss', epoch, train_loss)
             self.result_log.append('train_pref_loss', epoch, train_pref_loss)
@@ -231,8 +321,16 @@ class TSPPreferenceTrainer:
                     'scheduler_state_dict': self.scheduler.state_dict(),
                     'result_log': self.result_log.get_raw_data(),
                     'curriculum_problem_sizes': self.trainer_params['curriculum']['problem_sizes'],
+                    'base_replay_problem_size': self.trainer_params['curriculum']['base_replay_problem_size'],
+                    'curriculum_mix_weights': {
+                        'current_stage': self.trainer_params['curriculum']['current_stage_mix_weight'],
+                        'previous_stage': self.trainer_params['curriculum']['previous_stage_mix_weight'],
+                        'base_replay': self.trainer_params['curriculum']['base_replay_mix_weight'],
+                    },
                     'preference_beta': self.trainer_params['preference_beta'],
                     'preference_pair_k': self.trainer_params['preference_pair_k'],
+                    'use_reference_candidate_pool': self.trainer_params['use_reference_candidate_pool'],
+                    'preference_gap_weight_power': self.trainer_params['preference_gap_weight_power'],
                 }
                 torch.save(checkpoint_dict, '{}/checkpoint-{}.pt'.format(self.result_folder, epoch))
 
@@ -256,20 +354,25 @@ class TSPPreferenceTrainer:
                 self.logger.info("Now, printing log array...")
                 util_print_log_array(self.logger, self.result_log)
 
-    def _train_one_epoch(self, epoch, problem_size):
+    def _train_one_epoch(self, epoch, stage_info):
         score_AM = AverageMeter()
         loss_AM = AverageMeter()
         pref_loss_AM = AverageMeter()
         rl_loss_AM = AverageMeter()
 
         train_num_episode = self.trainer_params['train_episodes']
-        batch_size = self._get_train_batch_size(problem_size)
+        episode_targets = self._allocate_episode_targets(train_num_episode, stage_info['problem_mix_entries'])
+        episode_done_by_size = {
+            problem_size: 0 for problem_size in episode_targets.keys()
+        }
         episode = 0
         loop_cnt = 0
 
         while episode < train_num_episode:
-            remaining = train_num_episode - episode
-            current_batch_size = min(batch_size, remaining)
+            problem_size = self._select_next_problem_size(episode_targets, episode_done_by_size)
+            remaining_for_problem_size = episode_targets[problem_size] - episode_done_by_size[problem_size]
+            batch_size = self._get_train_batch_size(problem_size)
+            current_batch_size = min(batch_size, remaining_for_problem_size)
 
             try:
                 avg_score, avg_loss, avg_pref_loss, avg_rl_loss = self._train_one_batch(
@@ -278,25 +381,26 @@ class TSPPreferenceTrainer:
                 )
             except RuntimeError as error:
                 current_batch_size = self._handle_oom(problem_size, current_batch_size, error)
-                batch_size = self._get_train_batch_size(problem_size)
                 continue
             score_AM.update(avg_score, current_batch_size)
             loss_AM.update(avg_loss, current_batch_size)
             pref_loss_AM.update(avg_pref_loss, current_batch_size)
             rl_loss_AM.update(avg_rl_loss, current_batch_size)
 
+            episode_done_by_size[problem_size] += current_batch_size
             episode += current_batch_size
 
             if epoch == self.start_epoch:
                 loop_cnt += 1
                 if loop_cnt <= 10:
                     self.logger.info(
-                        'Epoch {:3d}: Train {:3d}/{:3d}({:1.1f}%)  '
+                        'Epoch {:3d}: Train {:3d}/{:3d}({:1.1f}%) size={} '
                         'Score: {:.4f}, Loss: {:.4f}, Pref: {:.4f}, RL: {:.4f}'.format(
                             epoch,
                             episode,
                             train_num_episode,
                             100. * episode / train_num_episode,
+                            problem_size,
                             score_AM.avg,
                             loss_AM.avg,
                             pref_loss_AM.avg,
@@ -304,14 +408,23 @@ class TSPPreferenceTrainer:
                         )
                     )
 
+        replay_summary = ', '.join(
+            '{}:{}/{}'.format(
+                problem_size,
+                episode_done_by_size[problem_size],
+                episode_targets[problem_size],
+            )
+            for problem_size, _ in stage_info['problem_mix_entries']
+        )
         self.logger.info(
-            'Epoch {:3d}: Train ({:3.0f}%)  Score: {:.4f}, Loss: {:.4f}, Pref: {:.4f}, RL: {:.4f}'.format(
+            'Epoch {:3d}: Train ({:3.0f}%)  Score: {:.4f}, Loss: {:.4f}, Pref: {:.4f}, RL: {:.4f}, Replay[{}]'.format(
                 epoch,
                 100. * episode / train_num_episode,
                 score_AM.avg,
                 loss_AM.avg,
                 pref_loss_AM.avg,
                 rl_loss_AM.avg,
+                replay_summary,
             )
         )
 
@@ -361,6 +474,43 @@ class TSPPreferenceTrainer:
     def _gather_multi_values(values, index):
         return values.gather(dim=1, index=index)
 
+    def _sample_reference_candidates(self, env):
+        original_eval_type = self.reference_model.model_params['eval_type']
+        self.reference_model.set_eval_type('softmax')
+        try:
+            reward, prob_list, selected_actions = self._rollout(
+                self.reference_model,
+                env,
+                collect_prob=True,
+                no_grad=True,
+            )
+        finally:
+            self.reference_model.set_eval_type(original_eval_type)
+
+        log_prob = prob_list.clamp_min(1e-12).log().sum(dim=2)
+        return reward, log_prob, selected_actions
+
+    def _compute_gap_weighted_preference_loss(
+        self,
+        preference_logits,
+        chosen_reward,
+        rejected_reward,
+    ):
+        pair_loss = -F.logsigmoid(preference_logits)
+        reward_gap = (chosen_reward[:, :, None] - rejected_reward[:, None, :]).clamp_min(0.0)
+        gap_scale = reward_gap.mean(dim=(1, 2), keepdim=True).clamp_min(1e-12)
+        gap_weights = reward_gap / gap_scale
+
+        gap_weight_power = self.trainer_params['preference_gap_weight_power']
+        if gap_weight_power != 1.0:
+            gap_weights = gap_weights.pow(gap_weight_power)
+
+        total_gap_weight = gap_weights.sum()
+        if total_gap_weight.item() <= 0:
+            return pair_loss.mean()
+
+        return (pair_loss * gap_weights).sum() / total_gap_weight
+
     def _train_one_batch(self, batch_size, problem_size):
         self.model.train()
         self.model.set_eval_type('softmax')
@@ -379,13 +529,6 @@ class TSPPreferenceTrainer:
         advantage = reward - reward.float().mean(dim=1, keepdim=True)
         rl_loss = (-advantage * log_prob).mean()
 
-        chosen_idx, rejected_idx, _ = self._build_preference_pair_indices(
-            reward,
-            self.trainer_params['preference_pair_k'],
-        )
-        chosen_log_prob = self._gather_multi_values(log_prob, chosen_idx)
-        rejected_log_prob = self._gather_multi_values(log_prob, rejected_idx)
-
         self.reference_model.eval()
         _, ref_prob_list, _ = self._rollout(
             self.reference_model,
@@ -395,8 +538,35 @@ class TSPPreferenceTrainer:
             forced_actions=selected_actions.detach(),
         )
         ref_log_prob = ref_prob_list.clamp_min(1e-12).log().sum(dim=2)
-        ref_chosen_log_prob = self._gather_multi_values(ref_log_prob, chosen_idx)
-        ref_rejected_log_prob = self._gather_multi_values(ref_log_prob, rejected_idx)
+
+        candidate_reward = reward
+        candidate_log_prob = log_prob
+        candidate_ref_log_prob = ref_log_prob
+        if self.trainer_params['use_reference_candidate_pool']:
+            ref_candidate_reward, ref_candidate_log_prob, ref_candidate_actions = self._sample_reference_candidates(env)
+            _, current_on_ref_prob_list, _ = self._rollout(
+                self.model,
+                env,
+                collect_prob=True,
+                no_grad=False,
+                forced_actions=ref_candidate_actions.detach(),
+            )
+            current_on_ref_log_prob = current_on_ref_prob_list.clamp_min(1e-12).log().sum(dim=2)
+
+            candidate_reward = torch.cat((candidate_reward, ref_candidate_reward), dim=1)
+            candidate_log_prob = torch.cat((candidate_log_prob, current_on_ref_log_prob), dim=1)
+            candidate_ref_log_prob = torch.cat((candidate_ref_log_prob, ref_candidate_log_prob), dim=1)
+
+        chosen_idx, rejected_idx, _ = self._build_preference_pair_indices(
+            candidate_reward,
+            self.trainer_params['preference_pair_k'],
+        )
+        chosen_log_prob = self._gather_multi_values(candidate_log_prob, chosen_idx)
+        rejected_log_prob = self._gather_multi_values(candidate_log_prob, rejected_idx)
+        ref_chosen_log_prob = self._gather_multi_values(candidate_ref_log_prob, chosen_idx)
+        ref_rejected_log_prob = self._gather_multi_values(candidate_ref_log_prob, rejected_idx)
+        chosen_reward = self._gather_multi_values(candidate_reward, chosen_idx)
+        rejected_reward = self._gather_multi_values(candidate_reward, rejected_idx)
 
         beta = self.trainer_params['preference_beta']
         chosen_delta = chosen_log_prob[:, :, None] - rejected_log_prob[:, None, :]
@@ -405,7 +575,11 @@ class TSPPreferenceTrainer:
             chosen_delta -
             ref_delta
         )
-        preference_loss = -F.logsigmoid(preference_logits).mean()
+        preference_loss = self._compute_gap_weighted_preference_loss(
+            preference_logits,
+            chosen_reward,
+            rejected_reward,
+        )
 
         total_loss = (
             self.trainer_params['preference_loss_weight'] * preference_loss +

@@ -173,16 +173,17 @@ python test_eas.py \
 cd TSP/POMO
 python post_train_preference.py \
   --base_checkpoint ./result/saved_tsp100_model2_longTrain/checkpoint-3000.pt \
-  --epochs 100 \
+  --epochs 60 \
   --preference_pair_k 4 \
-  --curriculum_problem_sizes 150 200 300 500
+  --curriculum_problem_sizes 150 200 300
 ```
 
 这个脚本默认会：
 
 - 载入已有 checkpoint 作为初始化模型和冻结 reference model
 - 用 `top-k vs bottom-k` 的多对偏好 supervision 做 DPO 风格 preference loss，再叠加少量原始 RL loss 保稳定
-- 在 `100` 个 epoch 内按课程学习依次覆盖 `150/200/300/500`
+- 用 `当前阶段 70% + 上一阶段 20% + 基础 100 节点 replay 10%` 的 mixed replay curriculum，默认在 `60` 个 epoch 内覆盖 `150/200/300`
+- 默认把当前策略 rollout 和冻结 reference model 的 sampled rollout 合并成 preference candidate pool，并按 chosen-vs-rejected 的 reward gap 加权 preference loss
 
 其中默认 `preference_pair_k = 4`，也就是同一实例内取前 `4` 条 shortest sampled tours 和后 `4` 条 longest sampled tours，构造多组偏好对；如果你想退化回原来的单对偏好，可以设成：
 
@@ -194,10 +195,10 @@ python post_train_preference.py \
 
 默认 batch schedule 为：
 
+- `100:32`
 - `150:32`
 - `200:24`
 - `300:12`
-- `500:4`
 
 如果在课程学习进入更大 problem size 后出现显存不足，例如超过 `50` 个 epoch 后切到 `300` 规模时 OOM，训练器现在会自动把当前规模的 batch size 减半并重试，直到不低于 `--min_train_batch_size`。
 
@@ -207,7 +208,7 @@ python post_train_preference.py \
 python post_train_preference.py \
   --base_checkpoint ./result/saved_tsp100_model2_longTrain/checkpoint-3000.pt \
   --min_train_batch_size 1 \
-  --batch_schedule 150:16,200:12,300:8,500:2
+  --batch_schedule 100:16,150:16,200:12,300:8
 ```
 
 如果训练在中途停止，例如跑到 `checkpoint-50.pt` 后因为显存问题中断，可以从该 checkpoint 继续训练：

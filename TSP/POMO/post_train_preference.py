@@ -31,7 +31,11 @@ from TSPPreferenceTrainer import TSPPreferenceTrainer as Trainer
 # defaults
 
 DEFAULT_BASE_CHECKPOINT = "./result/saved_tsp100_model2_longTrain/checkpoint-3000.pt"
-DEFAULT_CURRICULUM_SIZES = [150, 200, 300, 500]
+DEFAULT_CURRICULUM_SIZES = [150, 200, 300]
+DEFAULT_BASE_REPLAY_PROBLEM_SIZE = 100
+DEFAULT_CURRENT_STAGE_MIX_WEIGHT = 0.7
+DEFAULT_PREVIOUS_STAGE_MIX_WEIGHT = 0.2
+DEFAULT_BASE_REPLAY_MIX_WEIGHT = 0.1
 
 
 ##########################################################################################
@@ -71,7 +75,7 @@ def build_parser():
                         help="Checkpoint used as both initialization and frozen reference model.")
     parser.add_argument("--resume_checkpoint", default=None,
                         help="Resume an interrupted post-training run from a saved checkpoint.")
-    parser.add_argument("--epochs", type=int, default=100,
+    parser.add_argument("--epochs", type=int, default=60,
                         help="Number of post-training epochs.")
     parser.add_argument("--train_episodes", type=int, default=2048,
                         help="Number of training episodes per epoch.")
@@ -81,8 +85,8 @@ def build_parser():
                         help="Minimum batch size allowed when auto-reducing after CUDA OOM.")
     parser.add_argument(
         "--batch_schedule",
-        default="150:32,200:24,300:12,500:4",
-        help="Per-size batch schedule formatted as '150:32,200:24,...'.",
+        default="100:32,150:32,200:24,300:12",
+        help="Per-size batch schedule formatted as '100:32,150:32,200:24,...'.",
     )
     parser.add_argument(
         "--curriculum_problem_sizes",
@@ -91,19 +95,31 @@ def build_parser():
         default=DEFAULT_CURRICULUM_SIZES,
         help="Problem sizes used by the curriculum in order.",
     )
+    parser.add_argument("--base_replay_problem_size", type=int, default=DEFAULT_BASE_REPLAY_PROBLEM_SIZE,
+                        help="Base problem size kept as replay throughout post-training.")
+    parser.add_argument("--current_stage_mix_weight", type=float, default=DEFAULT_CURRENT_STAGE_MIX_WEIGHT,
+                        help="Replay weight for the current curriculum stage.")
+    parser.add_argument("--previous_stage_mix_weight", type=float, default=DEFAULT_PREVIOUS_STAGE_MIX_WEIGHT,
+                        help="Replay weight for the previous curriculum stage.")
+    parser.add_argument("--base_replay_mix_weight", type=float, default=DEFAULT_BASE_REPLAY_MIX_WEIGHT,
+                        help="Replay weight for the base problem size.")
     parser.add_argument("--preference_beta", type=float, default=0.1,
                         help="Temperature used in the DPO-style preference loss.")
     parser.add_argument("--preference_pair_k", type=int, default=4,
                         help="Use top-k vs bottom-k sampled tours to build multiple preference pairs.")
     parser.add_argument("--preference_loss_weight", type=float, default=1.0,
                         help="Weight applied to the preference loss.")
+    parser.add_argument("--use_reference_candidate_pool", type=str2bool, default=True,
+                        help="Augment preference candidates with sampled rollouts from the frozen reference model.")
+    parser.add_argument("--preference_gap_weight_power", type=float, default=1.0,
+                        help="Exponent applied to normalized chosen-vs-rejected reward gaps.")
     parser.add_argument("--rl_loss_weight", type=float, default=0.2,
                         help="Weight applied to the original REINFORCE loss for stability.")
     parser.add_argument("--lr", type=float, default=5e-5,
                         help="Learning rate for post-training.")
     parser.add_argument("--weight_decay", type=float, default=1e-6,
                         help="Weight decay for post-training.")
-    parser.add_argument("--milestones", type=int, nargs='*', default=[81, 91],
+    parser.add_argument("--milestones", type=int, nargs='*', default=[45, 55],
                         help="LR decay milestones for MultiStepLR.")
     parser.add_argument("--scheduler_gamma", type=float, default=0.2,
                         help="LR decay factor for MultiStepLR.")
@@ -120,7 +136,7 @@ def build_parser():
 # parameter builders
 
 def build_env_params(args):
-    base_problem_size = args.curriculum_problem_sizes[0]
+    base_problem_size = min([args.base_replay_problem_size] + args.curriculum_problem_sizes)
     return {
         'problem_size': base_problem_size,
         'pomo_size': base_problem_size,
@@ -165,9 +181,15 @@ def build_trainer_params(args):
         'preference_beta': args.preference_beta,
         'preference_pair_k': args.preference_pair_k,
         'preference_loss_weight': args.preference_loss_weight,
+        'use_reference_candidate_pool': args.use_reference_candidate_pool,
+        'preference_gap_weight_power': args.preference_gap_weight_power,
         'rl_loss_weight': args.rl_loss_weight,
         'curriculum': {
             'problem_sizes': args.curriculum_problem_sizes,
+            'base_replay_problem_size': args.base_replay_problem_size,
+            'current_stage_mix_weight': args.current_stage_mix_weight,
+            'previous_stage_mix_weight': args.previous_stage_mix_weight,
+            'base_replay_mix_weight': args.base_replay_mix_weight,
         },
         'logging': {
             'model_save_interval': 10,
@@ -240,7 +262,8 @@ def _print_config(args, env_params, model_params, optimizer_params, trainer_para
     logger.info('trainer_params{}'.format(trainer_params))
     logger.info(
         'Preference post-training uses a frozen reference checkpoint, top-k vs bottom-k '
-        'multi-pair preference supervision, and a 100-epoch curriculum over larger problem sizes by default.'
+        'multi-pair preference supervision, a 60-epoch mixed-replay curriculum over 150/200/300 by default, '
+        'and reward-gap weighted preference loss.'
     )
 
 
