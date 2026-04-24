@@ -420,45 +420,52 @@ class TSPPreferenceTrainer:
         episode = 0
         loop_cnt = 0
 
-        while episode < train_num_episode:
-            problem_size = self._select_next_problem_size(episode_targets, episode_done_by_size)
-            remaining_for_problem_size = episode_targets[problem_size] - episode_done_by_size[problem_size]
-            batch_size = self._get_train_batch_size(problem_size)
-            current_batch_size = min(batch_size, remaining_for_problem_size)
+        with create_progress_bar(
+            total=train_num_episode,
+            desc='Epoch {:3d}'.format(epoch),
+            unit='ep',
+            leave=False,
+        ) as progress_bar:
+            while episode < train_num_episode:
+                problem_size = self._select_next_problem_size(episode_targets, episode_done_by_size)
+                remaining_for_problem_size = episode_targets[problem_size] - episode_done_by_size[problem_size]
+                batch_size = self._get_train_batch_size(problem_size)
+                current_batch_size = min(batch_size, remaining_for_problem_size)
 
-            try:
-                avg_score, avg_loss, avg_pref_loss, avg_rl_loss = self._train_one_batch(
-                    batch_size=current_batch_size,
-                    problem_size=problem_size,
-                )
-            except RuntimeError as error:
-                current_batch_size = self._handle_oom(problem_size, current_batch_size, error)
-                continue
-            score_AM.update(avg_score, current_batch_size)
-            loss_AM.update(avg_loss, current_batch_size)
-            pref_loss_AM.update(avg_pref_loss, current_batch_size)
-            rl_loss_AM.update(avg_rl_loss, current_batch_size)
-
-            episode_done_by_size[problem_size] += current_batch_size
-            episode += current_batch_size
-
-            if epoch == self.start_epoch:
-                loop_cnt += 1
-                if loop_cnt <= 10:
-                    self.logger.info(
-                        'Epoch {:3d}: Train {:3d}/{:3d}({:1.1f}%) size={} '
-                        'Score: {:.4f}, Loss: {:.4f}, Pref: {:.4f}, RL: {:.4f}'.format(
-                            epoch,
-                            episode,
-                            train_num_episode,
-                            100. * episode / train_num_episode,
-                            problem_size,
-                            score_AM.avg,
-                            loss_AM.avg,
-                            pref_loss_AM.avg,
-                            rl_loss_AM.avg,
-                        )
+                try:
+                    avg_score, avg_loss, avg_pref_loss, avg_rl_loss = self._train_one_batch(
+                        batch_size=current_batch_size,
+                        problem_size=problem_size,
                     )
+                except RuntimeError as error:
+                    current_batch_size = self._handle_oom(problem_size, current_batch_size, error)
+                    continue
+                score_AM.update(avg_score, current_batch_size)
+                loss_AM.update(avg_loss, current_batch_size)
+                pref_loss_AM.update(avg_pref_loss, current_batch_size)
+                rl_loss_AM.update(avg_rl_loss, current_batch_size)
+
+                episode_done_by_size[problem_size] += current_batch_size
+                episode += current_batch_size
+                progress_bar.update(current_batch_size)
+
+                if epoch == self.start_epoch:
+                    loop_cnt += 1
+                    if loop_cnt <= 10:
+                        self.logger.info(
+                            'Epoch {:3d}: Train {:3d}/{:3d}({:1.1f}%) size={} '
+                            'Score: {:.4f}, Loss: {:.4f}, Pref: {:.4f}, RL: {:.4f}'.format(
+                                epoch,
+                                episode,
+                                train_num_episode,
+                                100. * episode / train_num_episode,
+                                problem_size,
+                                score_AM.avg,
+                                loss_AM.avg,
+                                pref_loss_AM.avg,
+                                rl_loss_AM.avg,
+                            )
+                        )
 
         replay_summary = ', '.join(
             '{}:{}/{}'.format(

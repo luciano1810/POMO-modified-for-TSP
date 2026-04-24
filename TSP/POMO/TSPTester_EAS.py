@@ -4,6 +4,7 @@ import torch
 
 from TSPTester_LIB import TSPTester_LIB
 from TSProblemDef import augment_xy_data_by_8_fold
+from utils.utils import create_progress_bar
 
 
 class TSPTester_EAS(TSPTester_LIB):
@@ -185,84 +186,93 @@ class TSPTester_EAS(TSPTester_LIB):
             self.model.set_eval_type('softmax')
             self.model.train()
 
-            for step in range(restart_steps):
-                optimizer.zero_grad(set_to_none=True)
+            with create_progress_bar(
+                total=restart_steps,
+                desc='EAS {}/{}'.format(restart_idx, len(restart_step_budgets)),
+                unit='step',
+                leave=False,
+                position=1,
+            ) as progress_bar:
+                for step in range(restart_steps):
+                    optimizer.zero_grad(set_to_none=True)
 
-                reward, prob_list = self._rollout(env, collect_prob=True, lib_mode=True, no_grad=False)
-                loss = self._compute_eas_loss(reward=reward, prob_list=prob_list)
-                loss.backward()
+                    reward, prob_list = self._rollout(env, collect_prob=True, lib_mode=True, no_grad=False)
+                    loss = self._compute_eas_loss(reward=reward, prob_list=prob_list)
+                    loss.backward()
 
-                grad_norm_value = None
-                if grad_clip > 0:
-                    grad_norm = torch.nn.utils.clip_grad_norm_(eas_params, grad_clip)
-                    grad_norm_value = float(grad_norm.item() if torch.is_tensor(grad_norm) else grad_norm)
+                    grad_norm_value = None
+                    if grad_clip > 0:
+                        grad_norm = torch.nn.utils.clip_grad_norm_(eas_params, grad_clip)
+                        grad_norm_value = float(grad_norm.item() if torch.is_tensor(grad_norm) else grad_norm)
 
-                optimizer.step()
+                    optimizer.step()
 
-                tour_lengths = -reward.detach()
-                best_len_per_aug = tour_lengths.min(dim=1).values
-                sampled_no_aug_score = float(best_len_per_aug[0].item())
-                sampled_aug_score = float(best_len_per_aug.min().item())
+                    tour_lengths = -reward.detach()
+                    best_len_per_aug = tour_lengths.min(dim=1).values
+                    sampled_no_aug_score = float(best_len_per_aug[0].item())
+                    sampled_aug_score = float(best_len_per_aug.min().item())
 
-                should_record = ((step + 1) % record_interval == 0) or ((step + 1) == restart_steps)
-                if should_record:
-                    candidate_no_aug_score, candidate_aug_score = self._score_current_candidate(env)
-                    if self._is_better_candidate(
-                        no_aug_score=candidate_no_aug_score,
-                        aug_score=candidate_aug_score,
-                        best_no_aug_score=best_recorded_no_aug_score,
-                        best_aug_score=best_recorded_aug_score,
-                    ):
-                        best_recorded_no_aug_score = candidate_no_aug_score
-                        best_recorded_aug_score = candidate_aug_score
-                        best_recorded_restart = restart_idx
-                        best_recorded_step = step + 1
-                        best_recorded_state = self._capture_eas_state()
-                        records_without_improvement = 0
-                        self.logger.info(
-                            "EAS candidate updated at restart {}/{} step {}/{}: "
-                            "select_no_aug {:.3f}, select_aug {:.3f}, sampled_no_aug {:.3f}, sampled_aug {:.3f}".format(
+                    should_record = ((step + 1) % record_interval == 0) or ((step + 1) == restart_steps)
+                    if should_record:
+                        candidate_no_aug_score, candidate_aug_score = self._score_current_candidate(env)
+                        if self._is_better_candidate(
+                            no_aug_score=candidate_no_aug_score,
+                            aug_score=candidate_aug_score,
+                            best_no_aug_score=best_recorded_no_aug_score,
+                            best_aug_score=best_recorded_aug_score,
+                        ):
+                            best_recorded_no_aug_score = candidate_no_aug_score
+                            best_recorded_aug_score = candidate_aug_score
+                            best_recorded_restart = restart_idx
+                            best_recorded_step = step + 1
+                            best_recorded_state = self._capture_eas_state()
+                            records_without_improvement = 0
+                            self.logger.info(
+                                "EAS candidate updated at restart {}/{} step {}/{}: "
+                                "select_no_aug {:.3f}, select_aug {:.3f}, sampled_no_aug {:.3f}, sampled_aug {:.3f}".format(
+                                    restart_idx,
+                                    len(restart_step_budgets),
+                                    step + 1,
+                                    restart_steps,
+                                    candidate_no_aug_score,
+                                    candidate_aug_score,
+                                    sampled_no_aug_score,
+                                    sampled_aug_score,
+                                )
+                            )
+                        else:
+                            records_without_improvement += 1
+
+                    if (step + 1) == 1 or (step + 1) == restart_steps or (step + 1) % log_interval == 0:
+                        log_message = (
+                            "EAS restart {}/{} step {}/{}: loss {:.6f}, sampled_no_aug {:.3f}, "
+                            "sampled_aug {:.3f}".format(
                                 restart_idx,
                                 len(restart_step_budgets),
                                 step + 1,
                                 restart_steps,
-                                candidate_no_aug_score,
-                                candidate_aug_score,
+                                loss.item(),
                                 sampled_no_aug_score,
                                 sampled_aug_score,
                             )
                         )
-                    else:
-                        records_without_improvement += 1
+                        if grad_norm_value is not None:
+                            log_message = "{}, grad_norm {:.3f}".format(log_message, grad_norm_value)
+                        self.logger.info(log_message)
 
-                if (step + 1) == 1 or (step + 1) == restart_steps or (step + 1) % log_interval == 0:
-                    log_message = (
-                        "EAS restart {}/{} step {}/{}: loss {:.6f}, sampled_no_aug {:.3f}, "
-                        "sampled_aug {:.3f}".format(
-                            restart_idx,
-                            len(restart_step_budgets),
-                            step + 1,
-                            restart_steps,
-                            loss.item(),
-                            sampled_no_aug_score,
-                            sampled_aug_score,
-                        )
-                    )
-                    if grad_norm_value is not None:
-                        log_message = "{}, grad_norm {:.3f}".format(log_message, grad_norm_value)
-                    self.logger.info(log_message)
+                    progress_bar.update(1)
 
-                if patience > 0 and records_without_improvement >= patience:
-                    self.logger.info(
-                        "EAS early stop at restart {}/{} step {}/{} after {} recorded checkpoints without improvement.".format(
-                            restart_idx,
-                            len(restart_step_budgets),
-                            step + 1,
-                            restart_steps,
-                            patience,
+                    if patience > 0 and records_without_improvement >= patience:
+                        self.logger.info(
+                            "EAS early stop at restart {}/{} step {}/{} after {} recorded checkpoints without improvement.".format(
+                                restart_idx,
+                                len(restart_step_budgets),
+                                step + 1,
+                                restart_steps,
+                                patience,
+                            )
                         )
-                    )
-                    break
+                        break
 
         self._load_eas_state(best_recorded_state)
         if best_recorded_restart == 0:

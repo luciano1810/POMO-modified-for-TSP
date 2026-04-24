@@ -17,3 +17,4 @@ NEW_py_ver/TSP/data/*
 
 TSP/data/test/*
 .DS_Store
+.codex

@@ -125,24 +125,31 @@ class TSPTrainer:
         train_num_episode = self.trainer_params['train_episodes']
         episode = 0
         loop_cnt = 0
-        while episode < train_num_episode:
+        with create_progress_bar(
+            total=train_num_episode,
+            desc='Epoch {:3d}'.format(epoch),
+            unit='ep',
+            leave=False,
+        ) as progress_bar:
+            while episode < train_num_episode:
 
-            remaining = train_num_episode - episode
-            batch_size = min(self.trainer_params['train_batch_size'], remaining)
+                remaining = train_num_episode - episode
+                batch_size = min(self.trainer_params['train_batch_size'], remaining)
 
-            avg_score, avg_loss = self._train_one_batch(batch_size)
-            score_AM.update(avg_score, batch_size)
-            loss_AM.update(avg_loss, batch_size)
+                avg_score, avg_loss = self._train_one_batch(batch_size)
+                score_AM.update(avg_score, batch_size)
+                loss_AM.update(avg_loss, batch_size)
 
-            episode += batch_size
+                episode += batch_size
+                progress_bar.update(batch_size)
 
-            # Log First 10 Batch, only at the first epoch
-            if epoch == self.start_epoch:
-                loop_cnt += 1
-                if loop_cnt <= 10:
-                    self.logger.info('Epoch {:3d}: Train {:3d}/{:3d}({:1.1f}%)  Score: {:.4f},  Loss: {:.4f}'
-                                     .format(epoch, episode, train_num_episode, 100. * episode / train_num_episode,
-                                             score_AM.avg, loss_AM.avg))
+                # Log First 10 Batch, only at the first epoch
+                if epoch == self.start_epoch:
+                    loop_cnt += 1
+                    if loop_cnt <= 10:
+                        self.logger.info('Epoch {:3d}: Train {:3d}/{:3d}({:1.1f}%)  Score: {:.4f},  Loss: {:.4f}'
+                                         .format(epoch, episode, train_num_episode, 100. * episode / train_num_episode,
+                                                 score_AM.avg, loss_AM.avg))
 
         # Log Once, for each epoch
         self.logger.info('Epoch {:3d}: Train ({:3.0f}%)  Score: {:.4f},  Loss: {:.4f}'

@@ -36,6 +36,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import json
 import shutil
+from tqdm.auto import tqdm
 
 process_start_time = datetime.now(pytz.timezone("Asia/Seoul"))
 result_folder = './result/' + process_start_time.strftime("%Y%m%d_%H%M%S") + '{desc}'
@@ -89,6 +90,12 @@ def create_logger(log_file=None):
     console.setLevel(logging.INFO)
     console.setFormatter(formatter)
     root_logger.addHandler(console)
+
+
+def create_progress_bar(*args, **kwargs):
+    kwargs.setdefault('dynamic_ncols', True)
+    kwargs.setdefault('file', sys.stderr)
+    return tqdm(*args, **kwargs)
 
 
 class AverageMeter:
@@ -390,4 +397,3 @@ def copy_all_src(dst_root):
                 except FileNotFoundError:
                     # Some modules may report a relative/non-existent path; skip.
                     pass
-

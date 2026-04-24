@@ -3,4 +3,5 @@
 torch
 numpy
 matplotlib
+tqdm
 pytz

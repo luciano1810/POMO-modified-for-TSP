@@ -12,6 +12,7 @@ from TSPEnv import TSPEnv as Env, Step_State
 from TSPModel import TSPModel as Model
 
 from TSProblemDef import augment_xy_data_by_8_fold
+from utils.utils import create_progress_bar
 
 from tsplib_utils import TSPLIBReader, tsplib_cost
 
@@ -144,10 +145,20 @@ class TSPTester_LIB:
         self.logger.info("Model loaded from: {}".format(checkpoint_fullname))
         self.logger.info("Number of parameters: %.2fM" % (total / 1e6))
 
+    @staticmethod
+    def _collect_tsp_files(filename: str) -> List[str]:
+        tsp_files = []
+        for root, _, files in os.walk(filename):
+            for file in files:
+                if file.endswith('.tsp'):
+                    tsp_files.append(os.path.join(root, file))
+        return tsp_files
+
     def run_lib(self) -> LibResult:
         filename = self.tester_params['filename']
         scale_range_all = self.tester_params.get('scale_range_all', [[0, 1000]])
         detailed_log = self.tester_params.get('detailed_log', False)
+        tsp_files = self._collect_tsp_files(filename)
 
         start_time_all = time.time()
         all_instance_num = 0
@@ -166,78 +177,82 @@ class TSPTester_LIB:
         for scale_range in scale_range_all:
             self.logger.info("#################  Test scale range: {}  #################".format(scale_range))
 
-            for root, _, files in os.walk(filename):
-                for file in files:
-                    if not file.endswith('.tsp'):
-                        continue
-
-                    full_path = os.path.join(root, file)
-                    name, dimension, locs, ew_type = TSPLIBReader(full_path)
-
-                    all_instance_num += 1
-
-                    if name is None:
-                        self.logger.info(f"Skip (unsupported or invalid TSPLIB): {full_path}")
-                        continue
-
-                    if not (scale_range[0] <= dimension < scale_range[1]):
-                        continue
-
-                    optimal = tsplib_cost.get(name, None)
-                    if optimal is None:
-                        self.logger.info(
-                            f"Optimal not found for {name}. "
-                            "Will report scores but leave gap fields empty."
-                        )
-
-                    self.logger.info("===============================================================")
-                    self.logger.info("Instance name: {}, problem_size: {}, EDGE_WEIGHT_TYPE: {}".format(name, dimension, ew_type))
-
-                    coords_orig_np = np.array(locs, dtype=np.float32)
-                    coords_orig = torch.from_numpy(coords_orig_np).to(self.device)
-                    node_coord = coords_orig[None, :, :]
-
-                    nodes_xy_normalized = _normalize_to_unit_square(node_coord)
-
+            with create_progress_bar(
+                total=len(tsp_files),
+                desc='TSPLIB {}-{}'.format(scale_range[0], scale_range[1]),
+                unit='file',
+                leave=False,
+            ) as progress_bar:
+                for full_path in tsp_files:
                     try:
-                        no_aug_score, aug_score = self._test_one_instance(
-                            nodes_xy_normalized=nodes_xy_normalized,
-                            coords_orig=coords_orig,
-                            ew_type=ew_type,
-                        )
-                    except Exception as e:
-                        self.logger.exception(f"Failed on instance {name}: {e}")
-                        continue
+                        name, dimension, locs, ew_type = TSPLIBReader(full_path)
 
-                    solved_instance_num += 1
+                        all_instance_num += 1
 
-                    if optimal is None:
-                        no_aug_gap = None
-                        aug_gap = None
-                    else:
-                        no_aug_gap = (no_aug_score - optimal) / optimal * 100
-                        aug_gap = (aug_score - optimal) / optimal * 100
+                        if name is None:
+                            self.logger.info(f"Skip (unsupported or invalid TSPLIB): {full_path}")
+                            continue
 
-                    result.instances.append(name)
-                    result.optimal.append(float(optimal) if optimal is not None else None)
-                    result.problem_size.append(int(dimension))
-                    result.no_aug_score.append(float(no_aug_score))
-                    result.aug_score.append(float(aug_score))
-                    result.no_aug_gap.append(float(no_aug_gap) if no_aug_gap is not None else None)
-                    result.aug_gap.append(float(aug_gap) if aug_gap is not None else None)
+                        if not (scale_range[0] <= dimension < scale_range[1]):
+                            continue
 
-                    if optimal is None:
-                        self.logger.info(
-                            "no public optimum. no_aug: {:.3f}, aug: {:.3f}".format(
-                                no_aug_score, aug_score
+                        optimal = tsplib_cost.get(name, None)
+                        if optimal is None:
+                            self.logger.info(
+                                f"Optimal not found for {name}. "
+                                "Will report scores but leave gap fields empty."
                             )
-                        )
-                    else:
-                        self.logger.info(
-                            "optimal: {:.3f}, no_aug: {:.3f} (gap {:.3f}%), aug: {:.3f} (gap {:.3f}%)".format(
-                                optimal, no_aug_score, no_aug_gap, aug_score, aug_gap
+
+                        self.logger.info("===============================================================")
+                        self.logger.info("Instance name: {}, problem_size: {}, EDGE_WEIGHT_TYPE: {}".format(name, dimension, ew_type))
+
+                        coords_orig_np = np.array(locs, dtype=np.float32)
+                        coords_orig = torch.from_numpy(coords_orig_np).to(self.device)
+                        node_coord = coords_orig[None, :, :]
+
+                        nodes_xy_normalized = _normalize_to_unit_square(node_coord)
+
+                        try:
+                            no_aug_score, aug_score = self._test_one_instance(
+                                nodes_xy_normalized=nodes_xy_normalized,
+                                coords_orig=coords_orig,
+                                ew_type=ew_type,
                             )
-                        )
+                        except Exception as e:
+                            self.logger.exception(f"Failed on instance {name}: {e}")
+                            continue
+
+                        solved_instance_num += 1
+
+                        if optimal is None:
+                            no_aug_gap = None
+                            aug_gap = None
+                        else:
+                            no_aug_gap = (no_aug_score - optimal) / optimal * 100
+                            aug_gap = (aug_score - optimal) / optimal * 100
+
+                        result.instances.append(name)
+                        result.optimal.append(float(optimal) if optimal is not None else None)
+                        result.problem_size.append(int(dimension))
+                        result.no_aug_score.append(float(no_aug_score))
+                        result.aug_score.append(float(aug_score))
+                        result.no_aug_gap.append(float(no_aug_gap) if no_aug_gap is not None else None)
+                        result.aug_gap.append(float(aug_gap) if aug_gap is not None else None)
+
+                        if optimal is None:
+                            self.logger.info(
+                                "no public optimum. no_aug: {:.3f}, aug: {:.3f}".format(
+                                    no_aug_score, aug_score
+                                )
+                            )
+                        else:
+                            self.logger.info(
+                                "optimal: {:.3f}, no_aug: {:.3f} (gap {:.3f}%), aug: {:.3f} (gap {:.3f}%)".format(
+                                    optimal, no_aug_score, no_aug_gap, aug_score, aug_gap
+                                )
+                            )
+                    finally:
+                        progress_bar.update(1)
 
         end_time_all = time.time()
         result.total_instance_num = all_instance_num
