@@ -47,6 +47,8 @@ DEFAULT_MODEL_DIR = "./result/saved_tsp100_model2_longTrain"
 DEFAULT_MODEL_EPOCH = 3000
 DEFAULT_AUGMENTATION_ENABLE = True
 DEFAULT_AUG_FACTOR = 8
+DEFAULT_NUM_SAMPLES = 8
+DEFAULT_ENABLE_2OPT = True
 DEFAULT_DETAILED_LOG = True
 
 MODEL_PARAMS = {
@@ -116,6 +118,18 @@ def build_parser():
     )
     parser.add_argument("--aug_factor", type=int, default=DEFAULT_AUG_FACTOR, help="Augmentation factor.")
     parser.add_argument(
+        "--num_samples",
+        type=int,
+        default=DEFAULT_NUM_SAMPLES,
+        help="Number of sampled decoding rounds (1 = greedy only).",
+    )
+    parser.add_argument(
+        "--enable_2opt",
+        type=str2bool,
+        default=DEFAULT_ENABLE_2OPT,
+        help="Enable 2-opt local search post-processing.",
+    )
+    parser.add_argument(
         "--detailed_log",
         type=str2bool,
         default=DEFAULT_DETAILED_LOG,
@@ -161,6 +175,8 @@ def build_tester_params(args):
         "filename": os.path.abspath(args.data_path),
         "augmentation_enable": args.augmentation_enable,
         "aug_factor": args.aug_factor,
+        "num_samples": max(1, args.num_samples),
+        "enable_2opt": args.enable_2opt,
         "detailed_log": args.detailed_log,
         # Only EUC_2D / CEIL_2D are supported (same as ICAM's LIBUtils.TSPLIBReader)
         "scale_range_all": [[args.scale_min, args.scale_max]],
