@@ -59,6 +59,13 @@ class TSPPreferenceTrainer:
             self.logger.info('Preference candidate pool: current-policy rollouts + sampled reference-policy rollouts.')
         else:
             self.logger.info('Preference candidate pool: current-policy rollouts only.')
+        if self.trainer_params.get('use_2opt_teacher_candidate', False):
+            self.logger.info(
+                'Preference candidate pool: appending one 2-opt teacher tour per instance '
+                '(max_iterations={}).'.format(
+                    self.trainer_params['two_opt_teacher_max_iterations']
+                )
+            )
         self.logger.info(
             'Preference gap weighting enabled with normalized_gap^{}.'.format(
                 self.trainer_params['preference_gap_weight_power']
@@ -290,6 +297,15 @@ class TSPPreferenceTrainer:
         env = Env(problem_size=problem_size, pomo_size=problem_size)
         return env
 
+    def _build_env_from_problems(self, problems, pomo_size):
+        env = Env(problem_size=problems.size(1), pomo_size=pomo_size)
+        env.batch_size = problems.size(0)
+        env.problems = problems
+        device = problems.device
+        env.BATCH_IDX = torch.arange(env.batch_size, device=device)[:, None].expand(env.batch_size, pomo_size)
+        env.POMO_IDX = torch.arange(pomo_size, device=device)[None, :].expand(env.batch_size, pomo_size)
+        return env
+
     def run(self):
         self.time_estimator.reset(self.start_epoch)
 
@@ -364,6 +380,8 @@ class TSPPreferenceTrainer:
                     'preference_beta': self.trainer_params['preference_beta'],
                     'preference_pair_k': self.trainer_params['preference_pair_k'],
                     'use_reference_candidate_pool': self.trainer_params['use_reference_candidate_pool'],
+                    'use_2opt_teacher_candidate': self.trainer_params.get('use_2opt_teacher_candidate', False),
+                    'two_opt_teacher_max_iterations': self.trainer_params.get('two_opt_teacher_max_iterations'),
                     'preference_gap_weight_power': self.trainer_params['preference_gap_weight_power'],
                 }
                 torch.save(checkpoint_dict, '{}/checkpoint-{}.pt'.format(self.result_folder, epoch))
@@ -524,6 +542,110 @@ class TSPPreferenceTrainer:
         log_prob = prob_list.clamp_min(1e-12).log().sum(dim=2)
         return reward, log_prob, selected_actions
 
+    def _two_opt_tour(self, tour, dist_matrix, max_iterations):
+        tour = list(tour)
+        node_count = len(tour)
+        if node_count < 4 or max_iterations <= 0:
+            return tour
+
+        iteration = 0
+        improved = True
+
+        while improved and iteration < max_iterations:
+            improved = False
+            iteration += 1
+
+            for left_idx in range(1, node_count - 1):
+                for right_idx in range(left_idx + 1, node_count):
+                    prev_left = tour[left_idx - 1]
+                    left = tour[left_idx]
+                    right = tour[right_idx]
+                    next_right = tour[(right_idx + 1) % node_count]
+
+                    delta = (
+                        dist_matrix[prev_left, right] +
+                        dist_matrix[left, next_right] -
+                        dist_matrix[prev_left, left] -
+                        dist_matrix[right, next_right]
+                    )
+                    if float(delta) < -1e-9:
+                        tour[left_idx:right_idx + 1] = reversed(tour[left_idx:right_idx + 1])
+                        improved = True
+                        break
+                if improved:
+                    break
+
+        return tour
+
+    def _build_2opt_teacher_actions(self, problems, source_actions):
+        max_iterations = int(self.trainer_params['two_opt_teacher_max_iterations'])
+        problems_cpu = problems.detach().cpu()
+        source_actions_cpu = source_actions.detach().cpu()
+
+        teacher_actions = []
+        for batch_idx in range(problems_cpu.size(0)):
+            coords = problems_cpu[batch_idx]
+            dist_matrix = torch.cdist(coords, coords, p=2)
+            source_tour = source_actions_cpu[batch_idx].tolist()
+            teacher_tour = self._two_opt_tour(
+                source_tour,
+                dist_matrix,
+                max_iterations=max_iterations,
+            )
+            teacher_actions.append(torch.tensor(teacher_tour, dtype=torch.long))
+
+        return torch.stack(teacher_actions, dim=0).to(self.device)[:, None, :]
+
+    def _append_2opt_teacher_candidate(
+        self,
+        problems,
+        candidate_reward,
+        candidate_log_prob,
+        candidate_ref_log_prob,
+        candidate_actions,
+    ):
+        best_candidate_idx = candidate_reward.argmax(dim=1)
+        batch_idx = torch.arange(candidate_reward.size(0), device=candidate_reward.device)
+        source_actions = candidate_actions[batch_idx, best_candidate_idx]
+        teacher_actions = self._build_2opt_teacher_actions(
+            problems=problems,
+            source_actions=source_actions,
+        )
+
+        teacher_env = self._build_env_from_problems(
+            problems=problems,
+            pomo_size=teacher_actions.size(1),
+        )
+        teacher_reward, teacher_prob_list, _ = self._rollout(
+            self.model,
+            teacher_env,
+            collect_prob=True,
+            no_grad=False,
+            forced_actions=teacher_actions.detach(),
+        )
+        teacher_log_prob = teacher_prob_list.clamp_min(1e-12).log().sum(dim=2)
+
+        self.reference_model.eval()
+        ref_teacher_env = self._build_env_from_problems(
+            problems=problems,
+            pomo_size=teacher_actions.size(1),
+        )
+        _, ref_teacher_prob_list, _ = self._rollout(
+            self.reference_model,
+            ref_teacher_env,
+            collect_prob=True,
+            no_grad=True,
+            forced_actions=teacher_actions.detach(),
+        )
+        teacher_ref_log_prob = ref_teacher_prob_list.clamp_min(1e-12).log().sum(dim=2)
+
+        return (
+            torch.cat((candidate_reward, teacher_reward), dim=1),
+            torch.cat((candidate_log_prob, teacher_log_prob), dim=1),
+            torch.cat((candidate_ref_log_prob, teacher_ref_log_prob), dim=1),
+            torch.cat((candidate_actions, teacher_actions), dim=1),
+        )
+
     def _compute_gap_weighted_preference_loss(
         self,
         preference_logits,
@@ -576,6 +698,7 @@ class TSPPreferenceTrainer:
         candidate_reward = reward
         candidate_log_prob = log_prob
         candidate_ref_log_prob = ref_log_prob
+        candidate_actions = selected_actions
         if self.trainer_params['use_reference_candidate_pool']:
             ref_candidate_reward, ref_candidate_log_prob, ref_candidate_actions = self._sample_reference_candidates(env)
             _, current_on_ref_prob_list, _ = self._rollout(
@@ -590,6 +713,21 @@ class TSPPreferenceTrainer:
             candidate_reward = torch.cat((candidate_reward, ref_candidate_reward), dim=1)
             candidate_log_prob = torch.cat((candidate_log_prob, current_on_ref_log_prob), dim=1)
             candidate_ref_log_prob = torch.cat((candidate_ref_log_prob, ref_candidate_log_prob), dim=1)
+            candidate_actions = torch.cat((candidate_actions, ref_candidate_actions), dim=1)
+
+        if self.trainer_params.get('use_2opt_teacher_candidate', False):
+            (
+                candidate_reward,
+                candidate_log_prob,
+                candidate_ref_log_prob,
+                candidate_actions,
+            ) = self._append_2opt_teacher_candidate(
+                problems=env.problems,
+                candidate_reward=candidate_reward,
+                candidate_log_prob=candidate_log_prob,
+                candidate_ref_log_prob=candidate_ref_log_prob,
+                candidate_actions=candidate_actions,
+            )
 
         chosen_idx, rejected_idx, _ = self._build_preference_pair_indices(
             candidate_reward,
