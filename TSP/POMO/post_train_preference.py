@@ -40,6 +40,8 @@ DEFAULT_PREVIOUS_STAGE_MIX_WEIGHT = 0.2
 DEFAULT_BASE_REPLAY_MIX_WEIGHT = 0.1
 DEFAULT_USE_2OPT_TEACHER_CANDIDATE = False
 DEFAULT_TWO_OPT_TEACHER_MAX_ITERATIONS = 50
+DEFAULT_TWO_OPT_TEACHER_INTERVAL = 1
+DEFAULT_TWO_OPT_TEACHER_BATCH_LIMIT = 0
 
 
 ##########################################################################################
@@ -166,6 +168,10 @@ def build_parser():
                         help="Append one 2-opt-improved teacher tour per instance to the preference candidate pool.")
     parser.add_argument("--two_opt_teacher_max_iterations", type=int, default=DEFAULT_TWO_OPT_TEACHER_MAX_ITERATIONS,
                         help="Maximum first-improvement 2-opt passes used to build each teacher tour.")
+    parser.add_argument("--two_opt_teacher_interval", type=int, default=DEFAULT_TWO_OPT_TEACHER_INTERVAL,
+                        help="Append 2-opt teacher candidates every N training batches; 1 means every batch.")
+    parser.add_argument("--two_opt_teacher_batch_limit", type=int, default=DEFAULT_TWO_OPT_TEACHER_BATCH_LIMIT,
+                        help="Maximum instances per batch that run 2-opt teacher search; <=0 means all instances.")
     parser.add_argument("--preference_gap_weight_power", type=float, default=1.0,
                         help="Exponent applied to normalized chosen-vs-rejected reward gaps.")
     parser.add_argument("--rl_loss_weight", type=float, default=0.2,
@@ -240,6 +246,8 @@ def build_trainer_params(args):
         'use_reference_candidate_pool': args.use_reference_candidate_pool,
         'use_2opt_teacher_candidate': args.use_2opt_teacher_candidate,
         'two_opt_teacher_max_iterations': args.two_opt_teacher_max_iterations,
+        'two_opt_teacher_interval': args.two_opt_teacher_interval,
+        'two_opt_teacher_batch_limit': args.two_opt_teacher_batch_limit,
         'preference_gap_weight_power': args.preference_gap_weight_power,
         'rl_loss_weight': args.rl_loss_weight,
         'curriculum': {

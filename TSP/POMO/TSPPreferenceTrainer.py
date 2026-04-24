@@ -62,8 +62,10 @@ class TSPPreferenceTrainer:
         if self.trainer_params.get('use_2opt_teacher_candidate', False):
             self.logger.info(
                 'Preference candidate pool: appending one 2-opt teacher tour per instance '
-                '(max_iterations={}).'.format(
-                    self.trainer_params['two_opt_teacher_max_iterations']
+                '(max_iterations={}, interval={}, batch_limit={}).'.format(
+                    self.trainer_params['two_opt_teacher_max_iterations'],
+                    self.trainer_params['two_opt_teacher_interval'],
+                    self.trainer_params['two_opt_teacher_batch_limit'],
                 )
             )
         self.logger.info(
@@ -73,6 +75,8 @@ class TSPPreferenceTrainer:
         )
 
         self.time_estimator = TimeEstimator()
+        self._two_opt_valid_mask_cache = {}
+        self.train_batch_counter = 0
 
     def _load_initial_states(self):
         model_load = self.trainer_params['model_load']
@@ -382,6 +386,8 @@ class TSPPreferenceTrainer:
                     'use_reference_candidate_pool': self.trainer_params['use_reference_candidate_pool'],
                     'use_2opt_teacher_candidate': self.trainer_params.get('use_2opt_teacher_candidate', False),
                     'two_opt_teacher_max_iterations': self.trainer_params.get('two_opt_teacher_max_iterations'),
+                    'two_opt_teacher_interval': self.trainer_params.get('two_opt_teacher_interval'),
+                    'two_opt_teacher_batch_limit': self.trainer_params.get('two_opt_teacher_batch_limit'),
                     'preference_gap_weight_power': self.trainer_params['preference_gap_weight_power'],
                 }
                 torch.save(checkpoint_dict, '{}/checkpoint-{}.pt'.format(self.result_folder, epoch))
@@ -549,59 +555,100 @@ class TSPPreferenceTrainer:
         log_prob = prob_list.clamp_min(1e-12).log().sum(dim=2)
         return reward, log_prob, selected_actions
 
-    def _two_opt_tour(self, tour, dist_matrix, max_iterations):
-        tour = list(tour)
-        node_count = len(tour)
+    def _should_append_2opt_teacher_candidate(self):
+        if not self.trainer_params.get('use_2opt_teacher_candidate', False):
+            return False
+        if int(self.trainer_params['two_opt_teacher_max_iterations']) <= 0:
+            return False
+
+        interval = max(1, int(self.trainer_params['two_opt_teacher_interval']))
+        return (self.train_batch_counter % interval) == 0
+
+    def _get_two_opt_valid_pair_mask(self, node_count, device):
+        cache_key = (node_count, device.type, device.index)
+        if cache_key not in self._two_opt_valid_mask_cache:
+            left_idx = torch.arange(node_count, device=device)[:, None]
+            right_idx = torch.arange(node_count, device=device)[None, :]
+            self._two_opt_valid_mask_cache[cache_key] = (
+                (left_idx >= 1) &
+                (left_idx <= node_count - 2) &
+                (right_idx > left_idx) &
+                (right_idx <= node_count - 1)
+            )
+        return self._two_opt_valid_mask_cache[cache_key]
+
+    def _batched_first_improvement_2opt(self, tours, dist_matrix, max_iterations):
+        batch_size, node_count = tours.size()
         if node_count < 4 or max_iterations <= 0:
-            return tour
+            return tours
 
-        iteration = 0
-        improved = True
+        valid_pair_mask = self._get_two_opt_valid_pair_mask(node_count, tours.device)
+        batch_line_idx = torch.arange(batch_size, device=tours.device)[:, None]
+        batch_idx = torch.arange(batch_size, device=tours.device)[:, None, None]
+        positions = torch.arange(node_count, device=tours.device)[None, :]
 
-        while improved and iteration < max_iterations:
-            improved = False
-            iteration += 1
+        for _ in range(max_iterations):
+            prev_left = tours.roll(shifts=1, dims=1)
+            left = tours
+            right = tours
+            next_right = tours.roll(shifts=-1, dims=1)
 
-            for left_idx in range(1, node_count - 1):
-                for right_idx in range(left_idx + 1, node_count):
-                    prev_left = tour[left_idx - 1]
-                    left = tour[left_idx]
-                    right = tour[right_idx]
-                    next_right = tour[(right_idx + 1) % node_count]
+            removed_prev_left_to_left = dist_matrix[
+                batch_line_idx,
+                prev_left,
+                left,
+            ]
+            removed_right_to_next_right = dist_matrix[
+                batch_line_idx,
+                right,
+                next_right,
+            ]
 
-                    delta = (
-                        dist_matrix[prev_left, right] +
-                        dist_matrix[left, next_right] -
-                        dist_matrix[prev_left, left] -
-                        dist_matrix[right, next_right]
-                    )
-                    if float(delta) < -1e-9:
-                        tour[left_idx:right_idx + 1] = reversed(tour[left_idx:right_idx + 1])
-                        improved = True
-                        break
-                if improved:
-                    break
+            delta = (
+                dist_matrix[batch_idx, prev_left[:, :, None], right[:, None, :]] +
+                dist_matrix[batch_idx, left[:, :, None], next_right[:, None, :]] -
+                removed_prev_left_to_left[:, :, None] -
+                removed_right_to_next_right[:, None, :]
+            )
+            improving_pairs = (delta < -1e-9) & valid_pair_mask[None, :, :]
+            flattened_improving_pairs = improving_pairs.reshape(batch_size, -1)
+            has_improvement = flattened_improving_pairs.any(dim=1)
 
-        return tour
+            first_improvement = flattened_improving_pairs.to(torch.int64).argmax(dim=1)
+            left_idx = first_improvement // node_count
+            right_idx = first_improvement % node_count
+
+            reverse_positions = left_idx[:, None] + right_idx[:, None] - positions
+            should_reverse = (
+                has_improvement[:, None] &
+                (positions >= left_idx[:, None]) &
+                (positions <= right_idx[:, None])
+            )
+            gather_positions = torch.where(should_reverse, reverse_positions, positions)
+            tours = tours.gather(dim=1, index=gather_positions)
+
+        return tours
 
     def _build_2opt_teacher_actions(self, problems, source_actions):
         max_iterations = int(self.trainer_params['two_opt_teacher_max_iterations'])
-        problems_cpu = problems.detach().cpu()
-        source_actions_cpu = source_actions.detach().cpu()
+        teacher_actions = source_actions.detach().clone()
 
-        teacher_actions = []
-        for batch_idx in range(problems_cpu.size(0)):
-            coords = problems_cpu[batch_idx]
-            dist_matrix = torch.cdist(coords, coords, p=2)
-            source_tour = source_actions_cpu[batch_idx].tolist()
-            teacher_tour = self._two_opt_tour(
-                source_tour,
-                dist_matrix,
-                max_iterations=max_iterations,
-            )
-            teacher_actions.append(torch.tensor(teacher_tour, dtype=torch.long))
+        batch_limit = int(self.trainer_params.get('two_opt_teacher_batch_limit', 0))
+        active_count = problems.size(0)
+        if batch_limit > 0:
+            active_count = min(active_count, batch_limit)
 
-        return torch.stack(teacher_actions, dim=0).to(self.device)[:, None, :]
+        if active_count > 0:
+            with torch.no_grad():
+                active_problems = problems[:active_count].detach()
+                dist_matrix = torch.cdist(active_problems, active_problems, p=2)
+                teacher_actions[:active_count] = self._batched_first_improvement_2opt(
+                    tours=teacher_actions[:active_count],
+                    dist_matrix=dist_matrix,
+                    max_iterations=max_iterations,
+                )
+
+        return teacher_actions[:, None, :]
 
     def _append_2opt_teacher_candidate(
         self,
@@ -675,6 +722,7 @@ class TSPPreferenceTrainer:
         return (pair_loss * gap_weights).sum() / total_gap_weight
 
     def _train_one_batch(self, batch_size, problem_size):
+        self.train_batch_counter += 1
         self.model.train()
         self.model.set_eval_type('softmax')
 
@@ -722,7 +770,7 @@ class TSPPreferenceTrainer:
             candidate_ref_log_prob = torch.cat((candidate_ref_log_prob, ref_candidate_log_prob), dim=1)
             candidate_actions = torch.cat((candidate_actions, ref_candidate_actions), dim=1)
 
-        if self.trainer_params.get('use_2opt_teacher_candidate', False):
+        if self._should_append_2opt_teacher_candidate():
             (
                 candidate_reward,
                 candidate_log_prob,
