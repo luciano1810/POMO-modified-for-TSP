@@ -15,3 +15,4 @@ NEW_py_ver/TSP/data/*
 .vscode/settings.json
 
 TSP/data/test/*
+.DS_Store
