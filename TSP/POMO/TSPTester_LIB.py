@@ -1,5 +1,6 @@
 import os
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from logging import getLogger
 from typing import Dict, List, Optional, Tuple
@@ -7,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
 
-from TSPEnv import TSPEnv as Env
+from TSPEnv import TSPEnv as Env, Step_State
 from TSPModel import TSPModel as Model
 
 from TSProblemDef import augment_xy_data_by_8_fold
@@ -22,6 +23,50 @@ def _normalize_to_unit_square(node_xy: torch.Tensor) -> torch.Tensor:
     ratio = torch.max((xy_max - xy_min), dim=-1, keepdim=True).values
     ratio[ratio == 0] = 1
     return (node_xy - xy_min) / ratio.expand(-1, 1, 2)
+
+
+def _compute_dist_matrix(coords: torch.Tensor, edge_weight_type: str = 'EUC_2D'):
+    diff = coords.unsqueeze(0) - coords.unsqueeze(1)
+    dists = (diff ** 2).sum(dim=2).sqrt()
+    if edge_weight_type == 'CEIL_2D':
+        dists = torch.ceil(dists)
+    elif edge_weight_type == 'EUC_2D':
+        dists = torch.floor(dists + 0.5)
+    return dists.detach().cpu().tolist()
+
+
+def _two_opt(tour, dist_matrix, max_iter: int = 10000):
+    tour = list(tour)
+    n = len(tour)
+    improved = True
+    iter_count = 0
+
+    while improved and iter_count < max_iter:
+        improved = False
+        for i in range(1, n - 1):
+            for j in range(i + 1, n):
+                a, b = tour[i - 1], tour[i]
+                c, d = tour[j], tour[(j + 1) % n]
+                delta = (
+                    dist_matrix[a][c]
+                    + dist_matrix[b][d]
+                    - dist_matrix[a][b]
+                    - dist_matrix[c][d]
+                )
+                if delta < -1e-6:
+                    tour[i:j + 1] = reversed(tour[i:j + 1])
+                    improved = True
+                    break
+            if improved:
+                break
+        iter_count += 1
+
+    return tour
+
+
+def _tour_length(tour, dist_matrix):
+    n = len(tour)
+    return sum(dist_matrix[tour[i]][tour[(i + 1) % n]] for i in range(n))
 
 
 @dataclass
@@ -85,7 +130,7 @@ class TSPTester_LIB:
             torch.set_default_tensor_type('torch.FloatTensor')
         self.device = device
 
-        self.model = Model(**self.model_params)
+        self.model = Model(**self.model_params).to(self.device)
 
         checkpoint_fullname = tester_params.get('checkpoint_path')
         if checkpoint_fullname is None:
@@ -95,6 +140,7 @@ class TSPTester_LIB:
         self.model.load_state_dict(checkpoint['model_state_dict'])
 
         total = sum([param.nelement() for param in self.model.parameters()])
+        self.base_eval_type = self.model.model_params['eval_type']
         self.logger.info("Model loaded from: {}".format(checkpoint_fullname))
         self.logger.info("Number of parameters: %.2fM" % (total / 1e6))
 
@@ -229,6 +275,109 @@ class TSPTester_LIB:
 
         return result
 
+    def _build_env(self, problems: torch.Tensor, coords_orig: torch.Tensor, ew_type: str) -> Env:
+        effective_batch = problems.size(0)
+        problem_size = problems.size(1)
+
+        env = Env(problem_size=problem_size, pomo_size=problem_size)
+        env.batch_size = effective_batch
+        env.problems = problems.to(self.device)
+        env.BATCH_IDX = torch.arange(effective_batch, device=self.device)[:, None].expand(effective_batch, env.pomo_size)
+        env.POMO_IDX = torch.arange(env.pomo_size, device=self.device)[None, :].expand(effective_batch, env.pomo_size)
+
+        env.original_node_xy_lib = coords_orig[None, :, :]
+        env.edge_weight_type = ew_type
+        return env
+
+    def _rollout(self, env: Env, collect_prob: bool, lib_mode: bool, no_grad: bool):
+        context = torch.no_grad() if no_grad else nullcontext()
+        with context:
+            reset_state, _, _ = env.reset()
+            self.model.pre_forward(reset_state)
+
+            state, reward, done = env.pre_step()
+            prob_list = []
+            while not done:
+                selected, prob = self.model(state)
+                state, reward, done = env.step(selected, lib_mode=lib_mode)
+                if collect_prob:
+                    prob_list.append(prob[:, :, None])
+
+        prob_tensor = None
+        if collect_prob:
+            prob_tensor = torch.cat(prob_list, dim=2)
+        return reward, prob_tensor
+
+    def _reset_env_for_redecode(self, env: Env):
+        env.selected_count = 0
+        env.current_node = None
+        env.selected_node_list = torch.zeros(
+            (env.batch_size, env.pomo_size, 0),
+            dtype=torch.long,
+            device=env.problems.device,
+        )
+        env.step_state = Step_State(BATCH_IDX=env.BATCH_IDX, POMO_IDX=env.POMO_IDX)
+        env.step_state.ninf_mask = torch.zeros(
+            (env.batch_size, env.pomo_size, env.problem_size),
+            device=env.problems.device,
+        )
+
+    def _evaluate(
+        self,
+        env: Env,
+        num_samples: Optional[int] = None,
+        enable_2opt: Optional[bool] = None,
+    ) -> Tuple[float, float]:
+        self.model.eval()
+        if num_samples is None:
+            num_samples = self.tester_params.get('num_samples', 1)
+        if enable_2opt is None:
+            enable_2opt = self.tester_params.get('enable_2opt', False)
+
+        num_samples = max(1, int(num_samples))
+        dist_matrix = None
+        if enable_2opt:
+            dist_matrix = _compute_dist_matrix(env.original_node_xy_lib[0], env.edge_weight_type)
+
+        all_sample_best = []
+        saved_eval_type = self.model.model_params['eval_type']
+
+        with torch.no_grad():
+            reset_state, _, _ = env.reset()
+            self.model.pre_forward(reset_state)
+
+            for sample_id in range(num_samples):
+                self.model.set_eval_type(
+                    'softmax' if num_samples > 1 and sample_id < num_samples - 1 else 'argmax'
+                )
+                self._reset_env_for_redecode(env)
+
+                state, reward, done = env.pre_step()
+                while not done:
+                    selected, _ = self.model(state)
+                    state, reward, done = env.step(selected, lib_mode=True)
+
+                tour_lengths = -reward
+                if enable_2opt:
+                    batch_best_lengths = []
+                    best_pomo_idx = tour_lengths.argmin(dim=1)
+                    for batch_idx in range(env.batch_size):
+                        tour = env.selected_node_list[batch_idx, best_pomo_idx[batch_idx].item()]
+                        optimized_tour = _two_opt(tour.detach().cpu().tolist(), dist_matrix)
+                        batch_best_lengths.append(_tour_length(optimized_tour, dist_matrix))
+                    best_scores = torch.tensor(batch_best_lengths, dtype=torch.float32)
+                else:
+                    best_scores = tour_lengths.min(dim=1).values.detach().cpu()
+
+                all_sample_best.append(best_scores)
+
+        self.model.set_eval_type(saved_eval_type)
+
+        all_sample_best = torch.stack(all_sample_best, dim=0)
+        no_aug_score = all_sample_best[:, 0].min().item()
+        aug_score = all_sample_best.min().item()
+        return float(no_aug_score), float(aug_score)
+
     def _test_one_instance(self, nodes_xy_normalized: torch.Tensor, coords_orig: torch.Tensor, ew_type: str) -> Tuple[float, float]:
         if self.tester_params['augmentation_enable']:
             aug_factor = self.tester_params['aug_factor']
@@ -240,37 +389,7 @@ class TSPTester_LIB:
         problems = nodes_xy_normalized
         if aug_factor > 1:
             problems = augment_xy_data_by_8_fold(problems)
+        env = self._build_env(problems=problems, coords_orig=coords_orig, ew_type=ew_type)
 
-        effective_batch = problems.size(0)
-        problem_size = problems.size(1)
-
-        env = Env(problem_size=problem_size, pomo_size=problem_size)
-
-        env.batch_size = effective_batch
-        env.problems = problems.to(self.device)
-        env.BATCH_IDX = torch.arange(effective_batch, device=self.device)[:, None].expand(effective_batch, env.pomo_size)
-        env.POMO_IDX = torch.arange(env.pomo_size, device=self.device)[None, :].expand(effective_batch, env.pomo_size)
-
-        # Unify TSPLIB scoring: let Env compute integer tour length.
-        # - original coords are used for TSPLIB cost (not normalized)
-        # - edge_weight_type controls EUC_2D vs CEIL_2D discretization
-        env.original_node_xy_lib = coords_orig[None, :, :]
-        env.edge_weight_type = ew_type
-
-        self.model.eval()
-        with torch.no_grad():
-            reset_state, _, _ = env.reset()
-            self.model.pre_forward(reset_state)
-
-            state, reward, done = env.pre_step()
-            while not done:
-                selected, _ = self.model(state)
-                state, reward, done = env.step(selected, lib_mode=True)
-
-        # reward is negative tour length at the final step
-        tour_lengths = -reward
-        best_len_per_aug = tour_lengths.min(dim=1).values
-        no_aug_score = best_len_per_aug[0].item()
-        aug_score = best_len_per_aug.min(dim=0).values.item()
-
-        return float(no_aug_score), float(aug_score)
+        no_aug_score, aug_score = self._evaluate(env)
+        return no_aug_score, aug_score

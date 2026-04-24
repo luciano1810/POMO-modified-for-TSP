@@ -20,12 +20,61 @@ class TSPModel(nn.Module):
         # shape: (batch, problem, EMBEDDING_DIM)
         self.decoder.set_kv(self.encoded_nodes)
 
-    def forward(self, state):
+    def set_eval_type(self, eval_type):
+        self.model_params['eval_type'] = eval_type
+
+    def get_eas_parameters(self, target):
+        encoder_first2 = [
+            (f'encoder.layers.{layer_idx}', layer)
+            for layer_idx, layer in enumerate(self.encoder.layers[:2])
+        ]
+        group_specs = {
+            'embedding': [
+                ('encoder.embedding', self.encoder.embedding),
+            ],
+            'decoder_wq_last': [
+                ('decoder.Wq_last', self.decoder.Wq_last),
+            ],
+            'decoder_combine': [
+                ('decoder.multi_head_combine', self.decoder.multi_head_combine),
+            ],
+            'decoder_last': [
+                ('decoder.Wq_last', self.decoder.Wq_last),
+                ('decoder.multi_head_combine', self.decoder.multi_head_combine),
+            ],
+            'encoder_first2': encoder_first2,
+            'embedding_decoder': [
+                ('encoder.embedding', self.encoder.embedding),
+                ('decoder.Wq_last', self.decoder.Wq_last),
+                ('decoder.multi_head_combine', self.decoder.multi_head_combine),
+            ],
+        }
+        if target not in group_specs:
+            raise ValueError(f"Unsupported EAS parameter group: {target}")
+
+        params = []
+        param_names = []
+        seen_param_ids = set()
+        for module_prefix, module in group_specs[target]:
+            for param_name, param in module.named_parameters():
+                param_id = id(param)
+                if param_id in seen_param_ids:
+                    continue
+                seen_param_ids.add(param_id)
+                params.append(param)
+                param_names.append(f'{module_prefix}.{param_name}')
+
+        return params, param_names
+
+    def forward(self, state, selected_override=None):
         batch_size = state.BATCH_IDX.size(0)
         pomo_size = state.BATCH_IDX.size(1)
 
         if state.current_node is None:
-            selected = torch.arange(pomo_size)[None, :].expand(batch_size, pomo_size)
+            if selected_override is None:
+                selected = torch.arange(pomo_size)[None, :].expand(batch_size, pomo_size)
+            else:
+                selected = selected_override
             prob = torch.ones(size=(batch_size, pomo_size))
 
             encoded_first_node = _get_encoding(self.encoded_nodes, selected)
@@ -38,7 +87,11 @@ class TSPModel(nn.Module):
             probs = self.decoder(encoded_last_node, ninf_mask=state.ninf_mask)
             # shape: (batch, pomo, problem)
 
-            if self.training or self.model_params['eval_type'] == 'softmax':
+            if selected_override is not None:
+                selected = selected_override
+                prob = probs[state.BATCH_IDX, state.POMO_IDX, selected] \
+                    .reshape(batch_size, pomo_size)
+            elif self.training or self.model_params['eval_type'] == 'softmax':
                 while True:
                     selected = probs.reshape(batch_size * pomo_size, -1).multinomial(1) \
                         .squeeze(dim=1).reshape(batch_size, pomo_size)

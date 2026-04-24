@@ -1,0 +1,490 @@
+[2026-04-22 20:44:08] post_train_preference.py(312) : DEBUG_MODE: False
+[2026-04-22 20:44:08] post_train_preference.py(313) : USE_CUDA: True, CUDA_DEVICE_NUM: 0
+[2026-04-22 20:44:08] post_train_preference.py(314) : env_params{'problem_size': 100, 'pomo_size': 100}
+[2026-04-22 20:44:08] post_train_preference.py(315) : model_params{'embedding_dim': 128, 'sqrt_embedding_dim': 11.313708498984761, 'encoder_layer_num': 6, 'qkv_dim': 16, 'head_num': 8, 'logit_clipping': 10, 'ff_hidden_dim': 512, 'eval_type': 'argmax'}
+[2026-04-22 20:44:08] post_train_preference.py(316) : optimizer_params{'optimizer': {'lr': 5e-05, 'weight_decay': 1e-06}, 'scheduler': {'milestones': [45, 55], 'gamma': 0.2}}
+[2026-04-22 20:44:08] post_train_preference.py(317) : trainer_params{'use_cuda': True, 'cuda_device_num': 0, 'epochs': 90, 'train_episodes': 2048, 'train_batch_size': 4, 'min_train_batch_size': 1, 'train_batch_size_by_problem_size': {100: 32, 150: 32, 200: 24, 300: 12}, 'preference_beta': 0.1, 'preference_pair_k': 4, 'preference_loss_weight': 1.0, 'use_reference_candidate_pool': True, 'preference_gap_weight_power': 1.0, 'rl_loss_weight': 0.2, 'curriculum': {'problem_sizes': [150, 200, 300], 'stage_epochs': [20, 30, 40], 'base_replay_problem_size': 100, 'current_stage_mix_weight': 0.7, 'previous_stage_mix_weight': 0.2, 'base_replay_mix_weight': 0.1}, 'logging': {'model_save_interval': 10, 'img_save_interval': 10, 'log_image_params_1': {'json_foldername': 'log_image_style', 'filename': 'style_tsp_100.json'}, 'log_image_params_2': {'json_foldername': 'log_image_style', 'filename': 'style_loss_1.json'}}, 'model_load': {'enable': True, 'path': '/home/shaoyw1810/桌面/Projects/SDM-5031-2026-Spring/TSP/POMO/result/saved_tsp100_model2_longTrain/checkpoint-3000.pt'}, 'resume_load': {'enable': False, 'path': None}}
+[2026-04-22 20:44:08] post_train_preference.py(318) : Preference post-training uses a frozen reference checkpoint, top-k vs bottom-k multi-pair preference supervision, a 90-epoch mixed-replay curriculum over 150/200/300 by default (20/30/40 epochs per stage), and reward-gap weighted preference loss.
+[2026-04-22 20:44:09] TSPPreferenceTrainer.py(87) : Reference checkpoint loaded from: /home/shaoyw1810/桌面/Projects/SDM-5031-2026-Spring/TSP/POMO/result/saved_tsp100_model2_longTrain/checkpoint-3000.pt
+[2026-04-22 20:44:09] TSPPreferenceTrainer.py(88) : Number of parameters: 1.27M
+[2026-04-22 20:44:09] TSPPreferenceTrainer.py(53) : Preference pairing: top-k vs bottom-k with k=4 (cartesian pairs per instance).
+[2026-04-22 20:44:09] TSPPreferenceTrainer.py(59) : Preference candidate pool: current-policy rollouts + sampled reference-policy rollouts.
+[2026-04-22 20:44:09] TSPPreferenceTrainer.py(62) : Preference gap weighting enabled with normalized_gap^1.0.
+[2026-04-22 20:44:09] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:44:09] TSPPreferenceTrainer.py(303) : Epoch   1: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:44:10] TSPPreferenceTrainer.py(430) : Epoch   1: Train  32/2048(1.6%) size=150 Score: 9.4015, Loss: 0.6451, Pref: 0.6931, RL: -0.2401
+[2026-04-22 20:44:10] TSPPreferenceTrainer.py(430) : Epoch   1: Train  64/2048(3.1%) size=100 Score: 8.5986, Loss: 0.6636, Pref: 0.6940, RL: -0.1520
+[2026-04-22 20:44:10] TSPPreferenceTrainer.py(430) : Epoch   1: Train  96/2048(4.7%) size=150 Score: 8.8759, Loss: 0.6623, Pref: 0.6993, RL: -0.1850
+[2026-04-22 20:44:11] TSPPreferenceTrainer.py(430) : Epoch   1: Train 128/2048(6.2%) size=150 Score: 9.0175, Loss: 0.6570, Pref: 0.6956, RL: -0.1932
+[2026-04-22 20:44:12] TSPPreferenceTrainer.py(430) : Epoch   1: Train 160/2048(7.8%) size=150 Score: 9.1109, Loss: 0.6426, Pref: 0.6826, RL: -0.1999
+[2026-04-22 20:44:12] TSPPreferenceTrainer.py(430) : Epoch   1: Train 192/2048(9.4%) size=150 Score: 9.1530, Loss: 0.6378, Pref: 0.6774, RL: -0.1979
+[2026-04-22 20:44:13] TSPPreferenceTrainer.py(430) : Epoch   1: Train 224/2048(10.9%) size=150 Score: 9.2031, Loss: 0.6334, Pref: 0.6733, RL: -0.1996
+[2026-04-22 20:44:13] TSPPreferenceTrainer.py(430) : Epoch   1: Train 256/2048(12.5%) size=150 Score: 9.2332, Loss: 0.6323, Pref: 0.6720, RL: -0.1986
+[2026-04-22 20:44:14] TSPPreferenceTrainer.py(430) : Epoch   1: Train 288/2048(14.1%) size=150 Score: 9.2547, Loss: 0.6281, Pref: 0.6679, RL: -0.1993
+[2026-04-22 20:44:14] TSPPreferenceTrainer.py(430) : Epoch   1: Train 320/2048(15.6%) size=100 Score: 9.1070, Loss: 0.6394, Pref: 0.6791, RL: -0.1984
+[2026-04-22 20:44:43] TSPPreferenceTrainer.py(453) : Epoch   1: Train (100%)  Score: 9.2310, Loss: 0.6614, Pref: 0.7127, RL: -0.2566, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:44:43] TSPPreferenceTrainer.py(323) : Epoch   1/ 90: Time Est.: Elapsed[0.57m], Remain[51.11m]
+[2026-04-22 20:44:43] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:44:43] TSPPreferenceTrainer.py(303) : Epoch   2: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:45:18] TSPPreferenceTrainer.py(453) : Epoch   2: Train (100%)  Score: 9.2319, Loss: 0.6692, Pref: 0.7145, RL: -0.2263, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:45:18] TSPPreferenceTrainer.py(323) : Epoch   2/ 90: Time Est.: Elapsed[1.15m], Remain[50.39m]
+[2026-04-22 20:45:18] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:45:18] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:45:18] TSPPreferenceTrainer.py(303) : Epoch   3: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:45:52] TSPPreferenceTrainer.py(453) : Epoch   3: Train (100%)  Score: 9.2431, Loss: 0.6605, Pref: 0.7028, RL: -0.2114, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:45:52] TSPPreferenceTrainer.py(323) : Epoch   3/ 90: Time Est.: Elapsed[1.72m], Remain[49.80m]
+[2026-04-22 20:45:52] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:45:52] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:45:52] TSPPreferenceTrainer.py(303) : Epoch   4: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:46:26] TSPPreferenceTrainer.py(453) : Epoch   4: Train (100%)  Score: 9.2359, Loss: 0.6596, Pref: 0.7031, RL: -0.2174, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:46:26] TSPPreferenceTrainer.py(323) : Epoch   4/ 90: Time Est.: Elapsed[2.29m], Remain[49.21m]
+[2026-04-22 20:46:26] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:46:26] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:46:26] TSPPreferenceTrainer.py(303) : Epoch   5: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:47:01] TSPPreferenceTrainer.py(453) : Epoch   5: Train (100%)  Score: 9.2362, Loss: 0.6597, Pref: 0.7024, RL: -0.2136, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:47:01] TSPPreferenceTrainer.py(323) : Epoch   5/ 90: Time Est.: Elapsed[2.86m], Remain[48.62m]
+[2026-04-22 20:47:01] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:47:01] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:47:01] TSPPreferenceTrainer.py(303) : Epoch   6: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:47:35] TSPPreferenceTrainer.py(453) : Epoch   6: Train (100%)  Score: 9.2395, Loss: 0.6614, Pref: 0.7024, RL: -0.2048, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:47:35] TSPPreferenceTrainer.py(323) : Epoch   6/ 90: Time Est.: Elapsed[3.43m], Remain[48.04m]
+[2026-04-22 20:47:35] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:47:35] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:47:35] TSPPreferenceTrainer.py(303) : Epoch   7: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:48:09] TSPPreferenceTrainer.py(453) : Epoch   7: Train (100%)  Score: 9.2239, Loss: 0.6820, Pref: 0.7228, RL: -0.2042, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:48:09] TSPPreferenceTrainer.py(323) : Epoch   7/ 90: Time Est.: Elapsed[4.00m], Remain[47.46m]
+[2026-04-22 20:48:09] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:48:09] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:48:09] TSPPreferenceTrainer.py(303) : Epoch   8: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:48:43] TSPPreferenceTrainer.py(453) : Epoch   8: Train (100%)  Score: 9.2266, Loss: 0.6772, Pref: 0.7180, RL: -0.2037, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:48:43] TSPPreferenceTrainer.py(323) : Epoch   8/ 90: Time Est.: Elapsed[4.58m], Remain[46.90m]
+[2026-04-22 20:48:43] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:48:43] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:48:43] TSPPreferenceTrainer.py(303) : Epoch   9: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:49:18] TSPPreferenceTrainer.py(453) : Epoch   9: Train (100%)  Score: 9.2338, Loss: 0.6468, Pref: 0.6866, RL: -0.1988, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:49:18] TSPPreferenceTrainer.py(323) : Epoch   9/ 90: Time Est.: Elapsed[5.15m], Remain[46.32m]
+[2026-04-22 20:49:18] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:49:18] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:49:18] TSPPreferenceTrainer.py(303) : Epoch  10: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:49:52] TSPPreferenceTrainer.py(453) : Epoch  10: Train (100%)  Score: 9.2196, Loss: 0.6586, Pref: 0.6985, RL: -0.1995, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:49:52] TSPPreferenceTrainer.py(323) : Epoch  10/ 90: Time Est.: Elapsed[5.72m], Remain[45.75m]
+[2026-04-22 20:49:52] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:49:52] TSPPreferenceTrainer.py(347) : Saving trained_model
+[2026-04-22 20:49:52] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:49:52] TSPPreferenceTrainer.py(303) : Epoch  11: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:50:26] TSPPreferenceTrainer.py(453) : Epoch  11: Train (100%)  Score: 9.2274, Loss: 0.6642, Pref: 0.7033, RL: -0.1955, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:50:26] TSPPreferenceTrainer.py(323) : Epoch  11/ 90: Time Est.: Elapsed[6.29m], Remain[45.18m]
+[2026-04-22 20:50:26] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:50:26] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:50:26] TSPPreferenceTrainer.py(303) : Epoch  12: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:51:01] TSPPreferenceTrainer.py(453) : Epoch  12: Train (100%)  Score: 9.2305, Loss: 0.6608, Pref: 0.7007, RL: -0.1994, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:51:01] TSPPreferenceTrainer.py(323) : Epoch  12/ 90: Time Est.: Elapsed[6.86m], Remain[44.61m]
+[2026-04-22 20:51:01] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:51:01] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:51:01] TSPPreferenceTrainer.py(303) : Epoch  13: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:51:35] TSPPreferenceTrainer.py(453) : Epoch  13: Train (100%)  Score: 9.2196, Loss: 0.6738, Pref: 0.7127, RL: -0.1947, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:51:35] TSPPreferenceTrainer.py(323) : Epoch  13/ 90: Time Est.: Elapsed[7.43m], Remain[44.04m]
+[2026-04-22 20:51:35] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:51:35] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:51:35] TSPPreferenceTrainer.py(303) : Epoch  14: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:52:09] TSPPreferenceTrainer.py(453) : Epoch  14: Train (100%)  Score: 9.2358, Loss: 0.6936, Pref: 0.7328, RL: -0.1955, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:52:09] TSPPreferenceTrainer.py(323) : Epoch  14/ 90: Time Est.: Elapsed[8.01m], Remain[43.46m]
+[2026-04-22 20:52:09] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:52:09] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:52:09] TSPPreferenceTrainer.py(303) : Epoch  15: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:52:44] TSPPreferenceTrainer.py(453) : Epoch  15: Train (100%)  Score: 9.2361, Loss: 0.6470, Pref: 0.6864, RL: -0.1973, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:52:44] TSPPreferenceTrainer.py(323) : Epoch  15/ 90: Time Est.: Elapsed[8.58m], Remain[42.90m]
+[2026-04-22 20:52:44] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:52:44] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:52:44] TSPPreferenceTrainer.py(303) : Epoch  16: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:53:18] TSPPreferenceTrainer.py(453) : Epoch  16: Train (100%)  Score: 9.2278, Loss: 0.6261, Pref: 0.6652, RL: -0.1957, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:53:18] TSPPreferenceTrainer.py(323) : Epoch  16/ 90: Time Est.: Elapsed[9.15m], Remain[42.33m]
+[2026-04-22 20:53:18] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:53:18] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:53:18] TSPPreferenceTrainer.py(303) : Epoch  17: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:53:52] TSPPreferenceTrainer.py(453) : Epoch  17: Train (100%)  Score: 9.2265, Loss: 0.6583, Pref: 0.6965, RL: -0.1910, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:53:52] TSPPreferenceTrainer.py(323) : Epoch  17/ 90: Time Est.: Elapsed[9.72m], Remain[41.75m]
+[2026-04-22 20:53:52] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:53:52] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:53:52] TSPPreferenceTrainer.py(303) : Epoch  18: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:54:27] TSPPreferenceTrainer.py(453) : Epoch  18: Train (100%)  Score: 9.2212, Loss: 0.6789, Pref: 0.7180, RL: -0.1955, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:54:27] TSPPreferenceTrainer.py(323) : Epoch  18/ 90: Time Est.: Elapsed[10.30m], Remain[41.18m]
+[2026-04-22 20:54:27] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:54:27] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:54:27] TSPPreferenceTrainer.py(303) : Epoch  19: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:55:01] TSPPreferenceTrainer.py(453) : Epoch  19: Train (100%)  Score: 9.2382, Loss: 0.6684, Pref: 0.7073, RL: -0.1943, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:55:01] TSPPreferenceTrainer.py(323) : Epoch  19/ 90: Time Est.: Elapsed[10.87m], Remain[40.61m]
+[2026-04-22 20:55:01] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:55:01] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:55:01] TSPPreferenceTrainer.py(303) : Epoch  20: curriculum stage 1/3 -> problem_size=150 (epochs 1-20), mix=[150:87.5%, 100:12.5%]
+[2026-04-22 20:55:35] TSPPreferenceTrainer.py(453) : Epoch  20: Train (100%)  Score: 9.2201, Loss: 0.6636, Pref: 0.7026, RL: -0.1948, Replay[150:1792/1792, 100:256/256]
+[2026-04-22 20:55:35] TSPPreferenceTrainer.py(323) : Epoch  20/ 90: Time Est.: Elapsed[11.44m], Remain[40.04m]
+[2026-04-22 20:55:35] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:55:35] TSPPreferenceTrainer.py(347) : Saving trained_model
+[2026-04-22 20:55:35] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:55:35] TSPPreferenceTrainer.py(303) : Epoch  21: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 20:55:36] TSPPreferenceTrainer.py(274) : CUDA OOM at problem_size=200, batch_size=24. Reducing batch size to 12 and retrying.
+[2026-04-22 20:56:42] TSPPreferenceTrainer.py(453) : Epoch  21: Train (100%)  Score: 10.3023, Loss: 0.3097, Pref: 0.3988, RL: -0.4456, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 20:56:42] TSPPreferenceTrainer.py(323) : Epoch  21/ 90: Time Est.: Elapsed[12.55m], Remain[41.22m]
+[2026-04-22 20:56:42] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:56:42] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:56:42] TSPPreferenceTrainer.py(303) : Epoch  22: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 20:57:47] TSPPreferenceTrainer.py(453) : Epoch  22: Train (100%)  Score: 10.2966, Loss: 0.3484, Pref: 0.4357, RL: -0.4366, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 20:57:47] TSPPreferenceTrainer.py(323) : Epoch  22/ 90: Time Est.: Elapsed[13.63m], Remain[42.13m]
+[2026-04-22 20:57:47] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:57:47] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:57:47] TSPPreferenceTrainer.py(303) : Epoch  23: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 20:58:52] TSPPreferenceTrainer.py(453) : Epoch  23: Train (100%)  Score: 10.2875, Loss: 0.3308, Pref: 0.4186, RL: -0.4387, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 20:58:52] TSPPreferenceTrainer.py(323) : Epoch  23/ 90: Time Est.: Elapsed[14.72m], Remain[42.88m]
+[2026-04-22 20:58:52] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:58:52] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:58:52] TSPPreferenceTrainer.py(303) : Epoch  24: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 20:59:58] TSPPreferenceTrainer.py(453) : Epoch  24: Train (100%)  Score: 10.2869, Loss: 0.3371, Pref: 0.4225, RL: -0.4273, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 20:59:58] TSPPreferenceTrainer.py(323) : Epoch  24/ 90: Time Est.: Elapsed[15.81m], Remain[43.48m]
+[2026-04-22 20:59:58] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 20:59:58] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 20:59:58] TSPPreferenceTrainer.py(303) : Epoch  25: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:01:03] TSPPreferenceTrainer.py(453) : Epoch  25: Train (100%)  Score: 10.2885, Loss: 0.3364, Pref: 0.4213, RL: -0.4244, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:01:03] TSPPreferenceTrainer.py(323) : Epoch  25/ 90: Time Est.: Elapsed[16.90m], Remain[43.94m]
+[2026-04-22 21:01:03] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:01:03] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:01:03] TSPPreferenceTrainer.py(303) : Epoch  26: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:02:08] TSPPreferenceTrainer.py(453) : Epoch  26: Train (100%)  Score: 10.2985, Loss: 0.3575, Pref: 0.4429, RL: -0.4271, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:02:08] TSPPreferenceTrainer.py(323) : Epoch  26/ 90: Time Est.: Elapsed[17.99m], Remain[44.28m]
+[2026-04-22 21:02:08] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:02:08] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:02:08] TSPPreferenceTrainer.py(303) : Epoch  27: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:03:13] TSPPreferenceTrainer.py(453) : Epoch  27: Train (100%)  Score: 10.2951, Loss: 0.3310, Pref: 0.4159, RL: -0.4247, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:03:13] TSPPreferenceTrainer.py(323) : Epoch  27/ 90: Time Est.: Elapsed[19.08m], Remain[44.51m]
+[2026-04-22 21:03:13] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:03:14] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:03:14] TSPPreferenceTrainer.py(303) : Epoch  28: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:04:19] TSPPreferenceTrainer.py(453) : Epoch  28: Train (100%)  Score: 10.3030, Loss: 0.3717, Pref: 0.4555, RL: -0.4191, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:04:19] TSPPreferenceTrainer.py(323) : Epoch  28/ 90: Time Est.: Elapsed[20.16m], Remain[44.65m]
+[2026-04-22 21:04:19] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:04:19] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:04:19] TSPPreferenceTrainer.py(303) : Epoch  29: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:05:24] TSPPreferenceTrainer.py(453) : Epoch  29: Train (100%)  Score: 10.2980, Loss: 0.3687, Pref: 0.4531, RL: -0.4218, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:05:24] TSPPreferenceTrainer.py(323) : Epoch  29/ 90: Time Est.: Elapsed[21.25m], Remain[44.70m]
+[2026-04-22 21:05:24] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:05:24] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:05:24] TSPPreferenceTrainer.py(303) : Epoch  30: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:06:29] TSPPreferenceTrainer.py(453) : Epoch  30: Train (100%)  Score: 10.2815, Loss: 0.3704, Pref: 0.4546, RL: -0.4210, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:06:29] TSPPreferenceTrainer.py(323) : Epoch  30/ 90: Time Est.: Elapsed[22.34m], Remain[44.68m]
+[2026-04-22 21:06:29] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:06:29] TSPPreferenceTrainer.py(347) : Saving trained_model
+[2026-04-22 21:06:29] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:06:29] TSPPreferenceTrainer.py(303) : Epoch  31: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:07:35] TSPPreferenceTrainer.py(453) : Epoch  31: Train (100%)  Score: 10.2875, Loss: 0.3763, Pref: 0.4610, RL: -0.4238, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:07:35] TSPPreferenceTrainer.py(323) : Epoch  31/ 90: Time Est.: Elapsed[23.43m], Remain[44.59m]
+[2026-04-22 21:07:35] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:07:35] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:07:35] TSPPreferenceTrainer.py(303) : Epoch  32: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:08:40] TSPPreferenceTrainer.py(453) : Epoch  32: Train (100%)  Score: 10.2936, Loss: 0.3606, Pref: 0.4441, RL: -0.4174, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:08:40] TSPPreferenceTrainer.py(323) : Epoch  32/ 90: Time Est.: Elapsed[24.52m], Remain[44.44m]
+[2026-04-22 21:08:40] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:08:40] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:08:40] TSPPreferenceTrainer.py(303) : Epoch  33: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:09:45] TSPPreferenceTrainer.py(453) : Epoch  33: Train (100%)  Score: 10.2925, Loss: 0.3798, Pref: 0.4625, RL: -0.4135, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:09:45] TSPPreferenceTrainer.py(323) : Epoch  33/ 90: Time Est.: Elapsed[25.61m], Remain[44.23m]
+[2026-04-22 21:09:45] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:09:45] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:09:45] TSPPreferenceTrainer.py(303) : Epoch  34: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:10:50] TSPPreferenceTrainer.py(453) : Epoch  34: Train (100%)  Score: 10.2894, Loss: 0.3498, Pref: 0.4316, RL: -0.4090, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:10:50] TSPPreferenceTrainer.py(323) : Epoch  34/ 90: Time Est.: Elapsed[26.69m], Remain[43.96m]
+[2026-04-22 21:10:50] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:10:50] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:10:50] TSPPreferenceTrainer.py(303) : Epoch  35: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:11:56] TSPPreferenceTrainer.py(453) : Epoch  35: Train (100%)  Score: 10.2925, Loss: 0.3863, Pref: 0.4695, RL: -0.4159, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:11:56] TSPPreferenceTrainer.py(323) : Epoch  35/ 90: Time Est.: Elapsed[27.78m], Remain[43.65m]
+[2026-04-22 21:11:56] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:11:56] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:11:56] TSPPreferenceTrainer.py(303) : Epoch  36: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:13:01] TSPPreferenceTrainer.py(453) : Epoch  36: Train (100%)  Score: 10.2932, Loss: 0.3870, Pref: 0.4716, RL: -0.4231, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:13:01] TSPPreferenceTrainer.py(323) : Epoch  36/ 90: Time Est.: Elapsed[28.87m], Remain[43.30m]
+[2026-04-22 21:13:01] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:13:01] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:13:01] TSPPreferenceTrainer.py(303) : Epoch  37: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:14:06] TSPPreferenceTrainer.py(453) : Epoch  37: Train (100%)  Score: 10.2808, Loss: 0.3677, Pref: 0.4503, RL: -0.4131, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:14:06] TSPPreferenceTrainer.py(323) : Epoch  37/ 90: Time Est.: Elapsed[29.96m], Remain[42.91m]
+[2026-04-22 21:14:06] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:14:06] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:14:06] TSPPreferenceTrainer.py(303) : Epoch  38: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:15:12] TSPPreferenceTrainer.py(453) : Epoch  38: Train (100%)  Score: 10.2840, Loss: 0.3939, Pref: 0.4784, RL: -0.4226, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:15:12] TSPPreferenceTrainer.py(323) : Epoch  38/ 90: Time Est.: Elapsed[31.04m], Remain[42.48m]
+[2026-04-22 21:15:12] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:15:12] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:15:12] TSPPreferenceTrainer.py(303) : Epoch  39: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:16:17] TSPPreferenceTrainer.py(453) : Epoch  39: Train (100%)  Score: 10.2853, Loss: 0.3683, Pref: 0.4501, RL: -0.4094, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:16:17] TSPPreferenceTrainer.py(323) : Epoch  39/ 90: Time Est.: Elapsed[32.13m], Remain[42.02m]
+[2026-04-22 21:16:17] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:16:17] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:16:17] TSPPreferenceTrainer.py(303) : Epoch  40: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:17:22] TSPPreferenceTrainer.py(453) : Epoch  40: Train (100%)  Score: 10.2822, Loss: 0.3733, Pref: 0.4565, RL: -0.4162, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:17:22] TSPPreferenceTrainer.py(323) : Epoch  40/ 90: Time Est.: Elapsed[33.22m], Remain[41.52m]
+[2026-04-22 21:17:22] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:17:22] TSPPreferenceTrainer.py(347) : Saving trained_model
+[2026-04-22 21:17:22] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:17:22] TSPPreferenceTrainer.py(303) : Epoch  41: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:18:27] TSPPreferenceTrainer.py(453) : Epoch  41: Train (100%)  Score: 10.2886, Loss: 0.3959, Pref: 0.4791, RL: -0.4161, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:18:27] TSPPreferenceTrainer.py(323) : Epoch  41/ 90: Time Est.: Elapsed[34.31m], Remain[41.00m]
+[2026-04-22 21:18:27] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:18:27] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:18:27] TSPPreferenceTrainer.py(303) : Epoch  42: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:19:33] TSPPreferenceTrainer.py(453) : Epoch  42: Train (100%)  Score: 10.2814, Loss: 0.3559, Pref: 0.4361, RL: -0.4010, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:19:33] TSPPreferenceTrainer.py(323) : Epoch  42/ 90: Time Est.: Elapsed[35.40m], Remain[40.45m]
+[2026-04-22 21:19:33] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:19:33] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:19:33] TSPPreferenceTrainer.py(303) : Epoch  43: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:20:38] TSPPreferenceTrainer.py(453) : Epoch  43: Train (100%)  Score: 10.2811, Loss: 0.3388, Pref: 0.4179, RL: -0.3955, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:20:38] TSPPreferenceTrainer.py(323) : Epoch  43/ 90: Time Est.: Elapsed[36.48m], Remain[39.88m]
+[2026-04-22 21:20:38] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:20:38] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:20:38] TSPPreferenceTrainer.py(303) : Epoch  44: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:21:43] TSPPreferenceTrainer.py(453) : Epoch  44: Train (100%)  Score: 10.2922, Loss: 0.3523, Pref: 0.4352, RL: -0.4147, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:21:43] TSPPreferenceTrainer.py(323) : Epoch  44/ 90: Time Est.: Elapsed[37.57m], Remain[39.28m]
+[2026-04-22 21:21:43] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:21:43] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:21:43] TSPPreferenceTrainer.py(303) : Epoch  45: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:22:49] TSPPreferenceTrainer.py(453) : Epoch  45: Train (100%)  Score: 10.2879, Loss: 0.3314, Pref: 0.4103, RL: -0.3946, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:22:49] TSPPreferenceTrainer.py(323) : Epoch  45/ 90: Time Est.: Elapsed[38.66m], Remain[38.66m]
+[2026-04-22 21:22:49] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:22:49] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:22:49] TSPPreferenceTrainer.py(303) : Epoch  46: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:23:54] TSPPreferenceTrainer.py(453) : Epoch  46: Train (100%)  Score: 10.2883, Loss: 0.2816, Pref: 0.3579, RL: -0.3815, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:23:54] TSPPreferenceTrainer.py(323) : Epoch  46/ 90: Time Est.: Elapsed[39.75m], Remain[38.02m]
+[2026-04-22 21:23:54] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:23:54] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:23:54] TSPPreferenceTrainer.py(303) : Epoch  47: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:24:59] TSPPreferenceTrainer.py(453) : Epoch  47: Train (100%)  Score: 10.2786, Loss: 0.2660, Pref: 0.3417, RL: -0.3788, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:24:59] TSPPreferenceTrainer.py(323) : Epoch  47/ 90: Time Est.: Elapsed[40.84m], Remain[37.36m]
+[2026-04-22 21:24:59] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:24:59] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:24:59] TSPPreferenceTrainer.py(303) : Epoch  48: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:26:04] TSPPreferenceTrainer.py(453) : Epoch  48: Train (100%)  Score: 10.2766, Loss: 0.2650, Pref: 0.3406, RL: -0.3779, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:26:04] TSPPreferenceTrainer.py(323) : Epoch  48/ 90: Time Est.: Elapsed[41.92m], Remain[36.68m]
+[2026-04-22 21:26:04] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:26:04] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:26:04] TSPPreferenceTrainer.py(303) : Epoch  49: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:27:10] TSPPreferenceTrainer.py(453) : Epoch  49: Train (100%)  Score: 10.2867, Loss: 0.2443, Pref: 0.3194, RL: -0.3755, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:27:10] TSPPreferenceTrainer.py(323) : Epoch  49/ 90: Time Est.: Elapsed[43.01m], Remain[35.99m]
+[2026-04-22 21:27:10] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:27:10] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:27:10] TSPPreferenceTrainer.py(303) : Epoch  50: curriculum stage 2/3 -> problem_size=200 (epochs 21-50), mix=[200:70.0%, 100:10.0%, 150:20.0%]
+[2026-04-22 21:28:15] TSPPreferenceTrainer.py(453) : Epoch  50: Train (100%)  Score: 10.2807, Loss: 0.2355, Pref: 0.3091, RL: -0.3681, Replay[200:1433/1433, 100:205/205, 150:410/410]
+[2026-04-22 21:28:15] TSPPreferenceTrainer.py(323) : Epoch  50/ 90: Time Est.: Elapsed[44.10m], Remain[35.28m]
+[2026-04-22 21:28:15] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:28:15] TSPPreferenceTrainer.py(347) : Saving trained_model
+[2026-04-22 21:28:15] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:28:15] TSPPreferenceTrainer.py(303) : Epoch  51: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 21:28:15] TSPPreferenceTrainer.py(274) : CUDA OOM at problem_size=300, batch_size=12. Reducing batch size to 6 and retrying.
+[2026-04-22 21:28:16] TSPPreferenceTrainer.py(274) : CUDA OOM at problem_size=300, batch_size=6. Reducing batch size to 3 and retrying.
+[2026-04-22 21:32:54] TSPPreferenceTrainer.py(453) : Epoch  51: Train (100%)  Score: 12.4908, Loss: 0.0430, Pref: 0.3480, RL: -1.5246, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 21:32:54] TSPPreferenceTrainer.py(323) : Epoch  51/ 90: Time Est.: Elapsed[48.75m], Remain[37.28m]
+[2026-04-22 21:32:54] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:32:54] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:32:54] TSPPreferenceTrainer.py(303) : Epoch  52: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 21:37:31] TSPPreferenceTrainer.py(453) : Epoch  52: Train (100%)  Score: 12.4423, Loss: 0.1285, Pref: 0.4224, RL: -1.4693, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 21:37:31] TSPPreferenceTrainer.py(323) : Epoch  52/ 90: Time Est.: Elapsed[53.37m], Remain[39.00m]
+[2026-04-22 21:37:31] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:37:31] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:37:31] TSPPreferenceTrainer.py(303) : Epoch  53: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 21:42:10] TSPPreferenceTrainer.py(453) : Epoch  53: Train (100%)  Score: 12.4264, Loss: 0.1895, Pref: 0.4796, RL: -1.4505, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 21:42:10] TSPPreferenceTrainer.py(323) : Epoch  53/ 90: Time Est.: Elapsed[58.01m], Remain[40.50m]
+[2026-04-22 21:42:10] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:42:10] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:42:10] TSPPreferenceTrainer.py(303) : Epoch  54: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 21:46:48] TSPPreferenceTrainer.py(453) : Epoch  54: Train (100%)  Score: 12.4185, Loss: 0.1965, Pref: 0.4772, RL: -1.4031, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 21:46:48] TSPPreferenceTrainer.py(323) : Epoch  54/ 90: Time Est.: Elapsed[1.04h], Remain[41.77m]
+[2026-04-22 21:46:48] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:46:48] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:46:48] TSPPreferenceTrainer.py(303) : Epoch  55: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 21:51:27] TSPPreferenceTrainer.py(453) : Epoch  55: Train (100%)  Score: 12.3998, Loss: 0.2104, Pref: 0.4839, RL: -1.3677, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 21:51:27] TSPPreferenceTrainer.py(323) : Epoch  55/ 90: Time Est.: Elapsed[1.12h], Remain[42.83m]
+[2026-04-22 21:51:27] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:51:27] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:51:27] TSPPreferenceTrainer.py(303) : Epoch  56: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 21:56:05] TSPPreferenceTrainer.py(453) : Epoch  56: Train (100%)  Score: 12.4084, Loss: 0.2258, Pref: 0.5031, RL: -1.3867, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 21:56:05] TSPPreferenceTrainer.py(323) : Epoch  56/ 90: Time Est.: Elapsed[1.20h], Remain[43.68m]
+[2026-04-22 21:56:05] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 21:56:05] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 21:56:05] TSPPreferenceTrainer.py(303) : Epoch  57: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 22:00:43] TSPPreferenceTrainer.py(453) : Epoch  57: Train (100%)  Score: 12.3955, Loss: 0.2487, Pref: 0.5254, RL: -1.3833, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 22:00:43] TSPPreferenceTrainer.py(323) : Epoch  57/ 90: Time Est.: Elapsed[1.28h], Remain[44.33m]
+[2026-04-22 22:00:43] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 22:00:43] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 22:00:43] TSPPreferenceTrainer.py(303) : Epoch  58: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 22:05:21] TSPPreferenceTrainer.py(453) : Epoch  58: Train (100%)  Score: 12.3926, Loss: 0.1987, Pref: 0.4726, RL: -1.3695, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 22:05:21] TSPPreferenceTrainer.py(323) : Epoch  58/ 90: Time Est.: Elapsed[1.35h], Remain[44.80m]
+[2026-04-22 22:05:21] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 22:05:21] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 22:05:21] TSPPreferenceTrainer.py(303) : Epoch  59: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 22:09:59] TSPPreferenceTrainer.py(453) : Epoch  59: Train (100%)  Score: 12.3809, Loss: 0.2403, Pref: 0.5138, RL: -1.3673, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 22:09:59] TSPPreferenceTrainer.py(323) : Epoch  59/ 90: Time Est.: Elapsed[1.43h], Remain[45.10m]
+[2026-04-22 22:09:59] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 22:10:00] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 22:10:00] TSPPreferenceTrainer.py(303) : Epoch  60: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 22:14:37] TSPPreferenceTrainer.py(453) : Epoch  60: Train (100%)  Score: 12.3857, Loss: 0.2280, Pref: 0.5016, RL: -1.3681, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 22:14:37] TSPPreferenceTrainer.py(323) : Epoch  60/ 90: Time Est.: Elapsed[1.51h], Remain[45.24m]
+[2026-04-22 22:14:37] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 22:14:37] TSPPreferenceTrainer.py(347) : Saving trained_model
+[2026-04-22 22:14:37] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 22:14:37] TSPPreferenceTrainer.py(303) : Epoch  61: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 22:19:16] TSPPreferenceTrainer.py(453) : Epoch  61: Train (100%)  Score: 12.3896, Loss: 0.2551, Pref: 0.5266, RL: -1.3577, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 22:19:16] TSPPreferenceTrainer.py(323) : Epoch  61/ 90: Time Est.: Elapsed[1.59h], Remain[45.22m]
+[2026-04-22 22:19:16] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 22:19:16] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 22:19:16] TSPPreferenceTrainer.py(303) : Epoch  62: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 22:23:54] TSPPreferenceTrainer.py(453) : Epoch  62: Train (100%)  Score: 12.3874, Loss: 0.2216, Pref: 0.4911, RL: -1.3475, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 22:23:54] TSPPreferenceTrainer.py(323) : Epoch  62/ 90: Time Est.: Elapsed[1.66h], Remain[45.05m]
+[2026-04-22 22:23:54] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 22:23:54] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 22:23:54] TSPPreferenceTrainer.py(303) : Epoch  63: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 22:28:32] TSPPreferenceTrainer.py(453) : Epoch  63: Train (100%)  Score: 12.3769, Loss: 0.2276, Pref: 0.4980, RL: -1.3522, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 22:28:32] TSPPreferenceTrainer.py(323) : Epoch  63/ 90: Time Est.: Elapsed[1.74h], Remain[44.73m]
+[2026-04-22 22:28:32] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 22:28:32] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 22:28:32] TSPPreferenceTrainer.py(303) : Epoch  64: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 22:33:09] TSPPreferenceTrainer.py(453) : Epoch  64: Train (100%)  Score: 12.3751, Loss: 0.2475, Pref: 0.5119, RL: -1.3220, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 22:33:09] TSPPreferenceTrainer.py(323) : Epoch  64/ 90: Time Est.: Elapsed[1.82h], Remain[44.28m]
+[2026-04-22 22:33:09] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 22:33:09] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 22:33:09] TSPPreferenceTrainer.py(303) : Epoch  65: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 22:37:48] TSPPreferenceTrainer.py(453) : Epoch  65: Train (100%)  Score: 12.3771, Loss: 0.2328, Pref: 0.4956, RL: -1.3141, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 22:37:48] TSPPreferenceTrainer.py(323) : Epoch  65/ 90: Time Est.: Elapsed[1.89h], Remain[43.71m]
+[2026-04-22 22:37:48] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 22:37:48] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 22:37:48] TSPPreferenceTrainer.py(303) : Epoch  66: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 22:42:25] TSPPreferenceTrainer.py(453) : Epoch  66: Train (100%)  Score: 12.3940, Loss: 0.2142, Pref: 0.4821, RL: -1.3390, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 22:42:25] TSPPreferenceTrainer.py(323) : Epoch  66/ 90: Time Est.: Elapsed[1.97h], Remain[43.01m]
+[2026-04-22 22:42:25] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 22:42:26] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 22:42:26] TSPPreferenceTrainer.py(303) : Epoch  67: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 22:47:03] TSPPreferenceTrainer.py(453) : Epoch  67: Train (100%)  Score: 12.3804, Loss: 0.2195, Pref: 0.4803, RL: -1.3040, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 22:47:03] TSPPreferenceTrainer.py(323) : Epoch  67/ 90: Time Est.: Elapsed[2.05h], Remain[42.19m]
+[2026-04-22 22:47:03] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 22:47:03] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 22:47:03] TSPPreferenceTrainer.py(303) : Epoch  68: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 22:51:41] TSPPreferenceTrainer.py(453) : Epoch  68: Train (100%)  Score: 12.3733, Loss: 0.2309, Pref: 0.4989, RL: -1.3397, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 22:51:41] TSPPreferenceTrainer.py(323) : Epoch  68/ 90: Time Est.: Elapsed[2.13h], Remain[41.26m]
+[2026-04-22 22:51:41] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 22:51:41] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 22:51:41] TSPPreferenceTrainer.py(303) : Epoch  69: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 22:56:18] TSPPreferenceTrainer.py(453) : Epoch  69: Train (100%)  Score: 12.3713, Loss: 0.2777, Pref: 0.5489, RL: -1.3558, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 22:56:18] TSPPreferenceTrainer.py(323) : Epoch  69/ 90: Time Est.: Elapsed[2.20h], Remain[40.22m]
+[2026-04-22 22:56:18] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 22:56:18] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 22:56:18] TSPPreferenceTrainer.py(303) : Epoch  70: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 23:00:55] TSPPreferenceTrainer.py(453) : Epoch  70: Train (100%)  Score: 12.3783, Loss: 0.2538, Pref: 0.5164, RL: -1.3130, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 23:00:55] TSPPreferenceTrainer.py(323) : Epoch  70/ 90: Time Est.: Elapsed[2.28h], Remain[39.08m]
+[2026-04-22 23:00:55] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 23:00:56] TSPPreferenceTrainer.py(347) : Saving trained_model
+[2026-04-22 23:00:56] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 23:00:56] TSPPreferenceTrainer.py(303) : Epoch  71: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 23:05:33] TSPPreferenceTrainer.py(453) : Epoch  71: Train (100%)  Score: 12.3664, Loss: 0.2336, Pref: 0.4953, RL: -1.3082, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 23:05:33] TSPPreferenceTrainer.py(323) : Epoch  71/ 90: Time Est.: Elapsed[2.36h], Remain[37.84m]
+[2026-04-22 23:05:33] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 23:05:33] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 23:05:33] TSPPreferenceTrainer.py(303) : Epoch  72: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 23:10:10] TSPPreferenceTrainer.py(453) : Epoch  72: Train (100%)  Score: 12.3712, Loss: 0.2767, Pref: 0.5360, RL: -1.2966, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 23:10:10] TSPPreferenceTrainer.py(323) : Epoch  72/ 90: Time Est.: Elapsed[2.43h], Remain[36.50m]
+[2026-04-22 23:10:10] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 23:10:10] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 23:10:10] TSPPreferenceTrainer.py(303) : Epoch  73: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 23:14:47] TSPPreferenceTrainer.py(453) : Epoch  73: Train (100%)  Score: 12.3738, Loss: 0.2476, Pref: 0.5064, RL: -1.2939, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 23:14:47] TSPPreferenceTrainer.py(323) : Epoch  73/ 90: Time Est.: Elapsed[2.51h], Remain[35.08m]
+[2026-04-22 23:14:47] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 23:14:47] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 23:14:47] TSPPreferenceTrainer.py(303) : Epoch  74: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 23:19:24] TSPPreferenceTrainer.py(453) : Epoch  74: Train (100%)  Score: 12.3659, Loss: 0.2331, Pref: 0.4889, RL: -1.2791, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 23:19:24] TSPPreferenceTrainer.py(323) : Epoch  74/ 90: Time Est.: Elapsed[2.59h], Remain[33.57m]
+[2026-04-22 23:19:24] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 23:19:24] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 23:19:24] TSPPreferenceTrainer.py(303) : Epoch  75: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 23:24:01] TSPPreferenceTrainer.py(453) : Epoch  75: Train (100%)  Score: 12.3523, Loss: 0.2556, Pref: 0.5167, RL: -1.3057, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 23:24:01] TSPPreferenceTrainer.py(323) : Epoch  75/ 90: Time Est.: Elapsed[2.66h], Remain[31.97m]
+[2026-04-22 23:24:01] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 23:24:01] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 23:24:01] TSPPreferenceTrainer.py(303) : Epoch  76: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 23:28:38] TSPPreferenceTrainer.py(453) : Epoch  76: Train (100%)  Score: 12.3647, Loss: 0.2588, Pref: 0.5162, RL: -1.2872, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 23:28:38] TSPPreferenceTrainer.py(323) : Epoch  76/ 90: Time Est.: Elapsed[2.74h], Remain[30.30m]
+[2026-04-22 23:28:38] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 23:28:38] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 23:28:38] TSPPreferenceTrainer.py(303) : Epoch  77: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 23:33:15] TSPPreferenceTrainer.py(453) : Epoch  77: Train (100%)  Score: 12.3646, Loss: 0.2711, Pref: 0.5261, RL: -1.2751, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 23:33:15] TSPPreferenceTrainer.py(323) : Epoch  77/ 90: Time Est.: Elapsed[2.82h], Remain[28.55m]
+[2026-04-22 23:33:15] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 23:33:16] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 23:33:16] TSPPreferenceTrainer.py(303) : Epoch  78: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 23:37:52] TSPPreferenceTrainer.py(453) : Epoch  78: Train (100%)  Score: 12.3643, Loss: 0.2593, Pref: 0.5193, RL: -1.2999, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 23:37:52] TSPPreferenceTrainer.py(323) : Epoch  78/ 90: Time Est.: Elapsed[2.90h], Remain[26.73m]
+[2026-04-22 23:37:52] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 23:37:53] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 23:37:53] TSPPreferenceTrainer.py(303) : Epoch  79: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 23:42:30] TSPPreferenceTrainer.py(453) : Epoch  79: Train (100%)  Score: 12.3641, Loss: 0.2566, Pref: 0.5096, RL: -1.2652, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 23:42:30] TSPPreferenceTrainer.py(323) : Epoch  79/ 90: Time Est.: Elapsed[2.97h], Remain[24.83m]
+[2026-04-22 23:42:30] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 23:42:30] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 23:42:30] TSPPreferenceTrainer.py(303) : Epoch  80: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 23:47:07] TSPPreferenceTrainer.py(453) : Epoch  80: Train (100%)  Score: 12.3567, Loss: 0.2666, Pref: 0.5181, RL: -1.2575, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 23:47:07] TSPPreferenceTrainer.py(323) : Epoch  80/ 90: Time Est.: Elapsed[3.05h], Remain[22.87m]
+[2026-04-22 23:47:07] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 23:47:07] TSPPreferenceTrainer.py(347) : Saving trained_model
+[2026-04-22 23:47:07] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 23:47:07] TSPPreferenceTrainer.py(303) : Epoch  81: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 23:51:42] TSPPreferenceTrainer.py(453) : Epoch  81: Train (100%)  Score: 12.3531, Loss: 0.2531, Pref: 0.5059, RL: -1.2641, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 23:51:42] TSPPreferenceTrainer.py(323) : Epoch  81/ 90: Time Est.: Elapsed[3.13h], Remain[20.84m]
+[2026-04-22 23:51:42] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 23:51:42] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 23:51:42] TSPPreferenceTrainer.py(303) : Epoch  82: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-22 23:56:12] TSPPreferenceTrainer.py(453) : Epoch  82: Train (100%)  Score: 12.3645, Loss: 0.2599, Pref: 0.5143, RL: -1.2721, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-22 23:56:12] TSPPreferenceTrainer.py(323) : Epoch  82/ 90: Time Est.: Elapsed[3.20h], Remain[18.74m]
+[2026-04-22 23:56:12] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-22 23:56:12] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-22 23:56:12] TSPPreferenceTrainer.py(303) : Epoch  83: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-23 00:00:43] TSPPreferenceTrainer.py(453) : Epoch  83: Train (100%)  Score: 12.3619, Loss: 0.2749, Pref: 0.5246, RL: -1.2489, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-23 00:00:43] TSPPreferenceTrainer.py(323) : Epoch  83/ 90: Time Est.: Elapsed[3.28h], Remain[16.58m]
+[2026-04-23 00:00:43] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-23 00:00:43] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-23 00:00:43] TSPPreferenceTrainer.py(303) : Epoch  84: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-23 00:05:14] TSPPreferenceTrainer.py(453) : Epoch  84: Train (100%)  Score: 12.3556, Loss: 0.2620, Pref: 0.5138, RL: -1.2591, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-23 00:05:14] TSPPreferenceTrainer.py(323) : Epoch  84/ 90: Time Est.: Elapsed[3.35h], Remain[14.36m]
+[2026-04-23 00:05:14] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-23 00:05:14] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-23 00:05:14] TSPPreferenceTrainer.py(303) : Epoch  85: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-23 00:09:44] TSPPreferenceTrainer.py(453) : Epoch  85: Train (100%)  Score: 12.3684, Loss: 0.2617, Pref: 0.5085, RL: -1.2338, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-23 00:09:44] TSPPreferenceTrainer.py(323) : Epoch  85/ 90: Time Est.: Elapsed[3.43h], Remain[12.09m]
+[2026-04-23 00:09:44] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-23 00:09:44] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-23 00:09:44] TSPPreferenceTrainer.py(303) : Epoch  86: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-23 00:14:19] TSPPreferenceTrainer.py(453) : Epoch  86: Train (100%)  Score: 12.3686, Loss: 0.2635, Pref: 0.5137, RL: -1.2509, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-23 00:14:19] TSPPreferenceTrainer.py(323) : Epoch  86/ 90: Time Est.: Elapsed[3.50h], Remain[9.77m]
+[2026-04-23 00:14:19] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-23 00:14:19] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-23 00:14:19] TSPPreferenceTrainer.py(303) : Epoch  87: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-23 00:18:50] TSPPreferenceTrainer.py(453) : Epoch  87: Train (100%)  Score: 12.3525, Loss: 0.2765, Pref: 0.5288, RL: -1.2618, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-23 00:18:50] TSPPreferenceTrainer.py(323) : Epoch  87/ 90: Time Est.: Elapsed[3.58h], Remain[7.40m]
+[2026-04-23 00:18:50] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-23 00:18:50] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-23 00:18:50] TSPPreferenceTrainer.py(303) : Epoch  88: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-23 00:23:20] TSPPreferenceTrainer.py(453) : Epoch  88: Train (100%)  Score: 12.3558, Loss: 0.2788, Pref: 0.5277, RL: -1.2443, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-23 00:23:20] TSPPreferenceTrainer.py(323) : Epoch  88/ 90: Time Est.: Elapsed[3.65h], Remain[4.98m]
+[2026-04-23 00:23:20] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-23 00:23:20] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-23 00:23:20] TSPPreferenceTrainer.py(303) : Epoch  89: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-23 00:27:51] TSPPreferenceTrainer.py(453) : Epoch  89: Train (100%)  Score: 12.3511, Loss: 0.2871, Pref: 0.5326, RL: -1.2277, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-23 00:27:51] TSPPreferenceTrainer.py(323) : Epoch  89/ 90: Time Est.: Elapsed[3.73h], Remain[2.51m]
+[2026-04-23 00:27:51] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-23 00:27:51] TSPPreferenceTrainer.py(297) : =================================================================
+[2026-04-23 00:27:51] TSPPreferenceTrainer.py(303) : Epoch  90: curriculum stage 3/3 -> problem_size=300 (epochs 51-90), mix=[300:70.0%, 100:10.0%, 200:20.0%]
+[2026-04-23 00:32:22] TSPPreferenceTrainer.py(453) : Epoch  90: Train (100%)  Score: 12.3494, Loss: 0.3218, Pref: 0.5680, RL: -1.2309, Replay[300:1433/1433, 100:205/205, 200:410/410]
+[2026-04-23 00:32:22] TSPPreferenceTrainer.py(323) : Epoch  90/ 90: Time Est.: Elapsed[3.80h], Remain[0.00m]
+[2026-04-23 00:32:22] TSPPreferenceTrainer.py(331) : Saving log_image
+[2026-04-23 00:32:22] TSPPreferenceTrainer.py(347) : Saving trained_model
+[2026-04-23 00:32:22] TSPPreferenceTrainer.py(387) :  *** Preference Post-Training Done *** 
+[2026-04-23 00:32:22] TSPPreferenceTrainer.py(388) : Now, printing log array...
+[2026-04-23 00:32:22] utils.py(236) : train_problem_size_list = [150, 150, 150, 150, 150, 150, 150, 150, 150, 150, 150, 150, 150, 150, 150, 150, 150, 150, 150, 150, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300]
+[2026-04-23 00:32:22] utils.py(236) : train_score_list = [9.231016375124454, 9.231935925781727, 9.243071891367435, 9.235944844782352, 9.236230477690697, 9.239483505487442, 9.22387209534645, 9.226648859679699, 9.233816899359226, 9.219551786780357, 9.227377273142338, 9.230525277554989, 9.219644136726856, 9.235847979784012, 9.236092075705528, 9.227802440524101, 9.226527988910675, 9.221191450953484, 9.23819200694561, 9.220137566328049, 10.302282162709162, 10.29656534967944, 10.287457924336195, 10.286852070130408, 10.288486885139719, 10.298482201993465, 10.295128360157833, 10.302975677885115, 10.29797870456241, 10.281459387857467, 10.287463397718966, 10.293647187994793, 10.292487373808399, 10.289425952592865, 10.292546692304313, 10.293174023972824, 10.280783862574026, 10.283997560851276, 10.285254640504718, 10.282193961786106, 10.288611569674686, 10.28141879546456, 10.281094273319468, 10.292222938733175, 10.287863043835387, 10.28827980789356, 10.27858297759667, 10.27659344789572, 10.286733285523951, 10.280665964120999, 12.490755379665643, 12.442305366043001, 12.42643559561111, 12.41849644947797, 12.399828618159518, 12.40838834270835, 12.395522981416434, 12.39257248933427, 12.380859032040462, 12.385736605385318, 12.389600814785808, 12.387421877123415, 12.376939937472343, 12.375082744285464, 12.377055568620563, 12.393975090701133, 12.380418639164418, 12.373338099103421, 12.371290316339582, 12.378317654365674, 12.366397013422102, 12.371223475551233, 12.373772920807824, 12.365862219361588, 12.352262887638062, 12.364668027032167, 12.364610825199634, 12.364276721142232, 12.364104764070362, 12.356716066366062, 12.353129922179505, 12.364532362669706, 12.36188880354166, 12.355601454619318, 12.36841093446128, 12.368590435013175, 12.352509445976466, 12.35584857664071, 12.351143051404506, 12.349403584841639]
+[2026-04-23 00:32:22] utils.py(236) : train_pref_loss_list = [0.7127104201354086, 0.7144522489979863, 0.7028118432499468, 0.7030586968176067, 0.7024297332391143, 0.7024100474081933, 0.7228016820736229, 0.7179822740145028, 0.6865649991668761, 0.69853879744187, 0.7032723519951105, 0.7007063855417073, 0.7127103977836668, 0.732754535973072, 0.6864378303289413, 0.6652380409650505, 0.6965139000676572, 0.7180443480610847, 0.7072671405039728, 0.7025696779601276, 0.3988027467374877, 0.4356975521981781, 0.41855581076379167, 0.42253732065785243, 0.42129120482985627, 0.4428926787301748, 0.4159321708957293, 0.4555210936919849, 0.45307828197312006, 0.45464111136860197, 0.46103613102692975, 0.4440583705509127, 0.4624907713220807, 0.4315679969329267, 0.4694659499630376, 0.4715714742714425, 0.45034555922362074, 0.4784019831794595, 0.45014299418940595, 0.4565122287878296, 0.47910717097448696, 0.43610652073884637, 0.4179081983152031, 0.4352131684660492, 0.4103114086847022, 0.35790857746530946, 0.3417419471024843, 0.3406313370335994, 0.3193820286352178, 0.30907945976767337, 0.34796583502351247, 0.4223794173346114, 0.4796419949853006, 0.4771731836153801, 0.48392644270643564, 0.5030998587935775, 0.525401242819503, 0.47256949359179323, 0.5137639424561081, 0.5016256268999703, 0.5266454024531424, 0.4910698092971879, 0.4980465046246876, 0.5118965543952079, 0.495587565825191, 0.48205420452079994, 0.48031895569056454, 0.49888368414514467, 0.5489065933616497, 0.5163611953994732, 0.49528108296431, 0.5359935021102411, 0.5063616469196859, 0.4889219722354032, 0.5167357675718451, 0.5162373663696656, 0.5261310639052682, 0.5192595176195031, 0.5095948933540058, 0.518100999991475, 0.5058944983167516, 0.5143459052196704, 0.5246420534839664, 0.5138311764342387, 0.5084885164138406, 0.5137035468038251, 0.5288450744992588, 0.5276513621635834, 0.5326070752853411, 0.5679700527307432]
+[2026-04-23 00:32:22] utils.py(236) : train_rl_loss_list = [-0.25655840267427266, -0.2262544244294986, -0.21139788278378546, -0.2174437113571912, -0.21359073591884226, -0.20481216174084693, -0.2041892291745171, -0.2037121867761016, -0.19877462973818183, -0.19948583282530308, -0.19553827948402613, -0.19940989883616567, -0.19468398008029908, -0.19553315872326493, -0.19733583077322692, -0.19571250025182962, -0.19099597807507962, -0.1955446107313037, -0.19434282730799168, -0.19475011248141527, -0.44561661825719057, -0.43661248965509003, -0.43873596827324945, -0.4273059058614308, -0.42436770098720444, -0.42707190790679306, -0.42465438954968704, -0.4190748730470659, -0.4218173184963234, -0.4210312767609139, -0.4238417349552037, -0.4173930361866951, -0.41352523751265835, -0.4090092339538387, -0.4159140723531891, -0.4230586231351481, -0.4131454656671849, -0.4226174461946357, -0.40943378056545043, -0.41624502069316804, -0.4160638846733491, -0.40102707650657976, -0.39550078578758985, -0.4147282414196525, -0.3945688894709747, -0.38147272393325693, -0.37877992240100866, -0.37793307254469255, -0.37546841800940456, -0.36812252326126327, -1.5245991539559327, -1.4693239966291003, -1.4505442989757285, -1.4031391675234772, -1.3677205491403583, -1.3866919249412604, -1.383342128858203, -1.3694563127646688, -1.3672812045551836, -1.3681263222533744, -1.3577055909263436, -1.347539859591052, -1.352200515626464, -1.3219879216339905, -1.3141184067353606, -1.3390213150705677, -1.3039849336491898, -1.3397388082230464, -1.3558018206385896, -1.3129509023565333, -1.308164733054582, -1.2966357465775218, -1.2939098848437425, -1.2791076272405917, -1.3057098987337667, -1.287196731340373, -1.2750758260081057, -1.2999257088522427, -1.265201535221422, -1.25752320967149, -1.2641477885772474, -1.2720926452602725, -1.2489426719257608, -1.2590951466700062, -1.2337778673972934, -1.250857433595229, -1.2617701157578267, -1.2442505244107451, -1.227670652209781, -1.230931574886199]
+[2026-04-23 00:32:22] utils.py(236) : train_loss_list = [0.6613987358286977, 0.6692013638094068, 0.6605322719551623, 0.6595699521712959, 0.6597115825861692, 0.6614476153627038, 0.68196383677423, 0.6772398413158953, 0.6468100743368268, 0.6586416326463223, 0.6641646958887577, 0.6608244017697871, 0.6737736002542078, 0.6936479024589062, 0.6469706697389483, 0.6260955412872136, 0.6583147053606808, 0.6789354220964015, 0.6683985702693462, 0.663619655650109, 0.30967942058850895, 0.34837505519681145, 0.3308086137076316, 0.3370761364712962, 0.33641766434084275, 0.35747829786123475, 0.33100128817750374, 0.371706118745351, 0.36871482008791645, 0.3704348538085469, 0.3762677863051067, 0.36057976206575404, 0.37978572327119764, 0.34976614970582887, 0.3862831313672359, 0.38695974556321744, 0.36771646319539286, 0.3938784898891754, 0.3682562367612263, 0.3732632266874134, 0.3958943918260047, 0.35590110707562417, 0.33880804094224004, 0.3522675195672491, 0.331397629379353, 0.2816140298782557, 0.26598596150506637, 0.2650447214327869, 0.24428834254104004, 0.2354549519259308, 0.04304599851457169, 0.12851461003447184, 0.18953313130623428, 0.1965453446682659, 0.21038232825958403, 0.2257614713453222, 0.24873281129839597, 0.19867822548258118, 0.24030769205273828, 0.22800035278487485, 0.2551042791674263, 0.22156182659091428, 0.2276063930039527, 0.24749896664434345, 0.23276388186059194, 0.21424993647815427, 0.21952196606434882, 0.23093592295481358, 0.2777462266385555, 0.25377100610057823, 0.23364813198713819, 0.27666634740307927, 0.24757966578908963, 0.23310043477249565, 0.25559378619800555, 0.2587980172393145, 0.2711158987294766, 0.25927437286736676, 0.2565545851175557, 0.2665963556501083, 0.2530649321852252, 0.25992737428168766, 0.2748535190039547, 0.2620121394502348, 0.2617329367712955, 0.2635320586996386, 0.2764910482655978, 0.278801253734855, 0.28707294115883997, 0.3217837332340423]
