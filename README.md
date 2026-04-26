@@ -307,18 +307,19 @@ python post_train_preference.py \
   --previous_stage_mix_weight 0 \
   --current_stage_mix_weight 1 \
   --use_2opt_teacher_candidate true \
-  --two_opt_teacher_max_iterations 10 \
+  --two_opt_teacher_max_iterations 20 \
+  --teacher_preference_loss_weight 0.2 \
   --lora_enable true \
   --lora_targets decoder_last \
-  --lora_rank 4 \
-  --lora_alpha 8 \
+  --lora_rank 8 \
+  --lora_alpha 16 \
   --lora_dropout 0 \
-  --lr 1e-4 \
+  --lr 8e-5 \
   --weight_decay 0 \
   --rl_loss_weight 0 \
-  --preference_beta 0.03 \
+  --preference_beta 0.05 \
   --preference_pair_k 2 \
-  --preference_gap_weight_power 0.5 \
+  --preference_gap_weight_power 1.0 \
   --batch_schedule 300:4 \
   --milestones 4 \
   --scheduler_gamma 0.3

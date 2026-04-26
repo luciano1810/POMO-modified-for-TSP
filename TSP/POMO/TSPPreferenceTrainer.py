@@ -74,6 +74,13 @@ class TSPPreferenceTrainer:
                     self.trainer_params['two_opt_teacher_max_iterations']
                 )
             )
+            teacher_preference_loss_weight = self.trainer_params.get('teacher_preference_loss_weight', 0.0)
+            if teacher_preference_loss_weight > 0:
+                self.logger.info(
+                    '2-opt teacher auxiliary preference loss enabled with weight={}.'.format(
+                        teacher_preference_loss_weight
+                    )
+                )
         if self.trainer_params.get('lora_enable', False):
             self.logger.info(
                 'LoRA training enabled: targets={}, rank={}, alpha={}, dropout={}.'.format(
@@ -521,6 +528,7 @@ class TSPPreferenceTrainer:
                     'use_reference_candidate_pool': self.trainer_params['use_reference_candidate_pool'],
                     'use_2opt_teacher_candidate': self.trainer_params.get('use_2opt_teacher_candidate', False),
                     'two_opt_teacher_max_iterations': self.trainer_params.get('two_opt_teacher_max_iterations'),
+                    'teacher_preference_loss_weight': self.trainer_params.get('teacher_preference_loss_weight', 0.0),
                     'preference_gap_weight_power': self.trainer_params['preference_gap_weight_power'],
                     'lora_enable': self.trainer_params.get('lora_enable', False),
                     'lora_targets': self.trainer_params.get('lora_targets'),
@@ -828,6 +836,45 @@ class TSPPreferenceTrainer:
 
         return (pair_loss * gap_weights).sum() / total_gap_weight
 
+    def _compute_teacher_preference_loss(
+        self,
+        candidate_log_prob,
+        candidate_ref_log_prob,
+        candidate_reward,
+    ):
+        if candidate_reward.size(1) <= 1:
+            return candidate_log_prob.sum() * 0.0
+
+        teacher_log_prob = candidate_log_prob[:, -1:]
+        teacher_ref_log_prob = candidate_ref_log_prob[:, -1:]
+        teacher_reward = candidate_reward[:, -1:]
+
+        rejected_log_prob = candidate_log_prob[:, :-1]
+        rejected_ref_log_prob = candidate_ref_log_prob[:, :-1]
+        rejected_reward = candidate_reward[:, :-1]
+
+        reward_gap = (teacher_reward - rejected_reward).clamp_min(0.0)
+        valid_pair = reward_gap > 1e-12
+        if not bool(valid_pair.any()):
+            return candidate_log_prob.sum() * 0.0
+
+        beta = self.trainer_params['preference_beta']
+        preference_logits = beta * (
+            (teacher_log_prob - rejected_log_prob) -
+            (teacher_ref_log_prob - rejected_ref_log_prob)
+        )
+        pair_loss = -F.logsigmoid(preference_logits)
+
+        gap_scale = reward_gap[valid_pair].mean().clamp_min(1e-12)
+        gap_weights = reward_gap / gap_scale
+        gap_weights = gap_weights.masked_fill(~valid_pair, 0.0)
+
+        gap_weight_power = self.trainer_params['preference_gap_weight_power']
+        if gap_weight_power != 1.0:
+            gap_weights = gap_weights.pow(gap_weight_power)
+
+        return (pair_loss * gap_weights).sum() / gap_weights.sum().clamp_min(1e-12)
+
     def _train_one_batch(self, batch_size, problem_size):
         self.model.train()
         self.model.set_eval_type('softmax')
@@ -913,6 +960,19 @@ class TSPPreferenceTrainer:
             chosen_reward,
             rejected_reward,
         )
+        teacher_preference_loss_weight = self.trainer_params.get('teacher_preference_loss_weight', 0.0)
+        if (
+            self.trainer_params.get('use_2opt_teacher_candidate', False) and
+            teacher_preference_loss_weight > 0
+        ):
+            preference_loss = preference_loss + (
+                teacher_preference_loss_weight *
+                self._compute_teacher_preference_loss(
+                    candidate_log_prob=candidate_log_prob,
+                    candidate_ref_log_prob=candidate_ref_log_prob,
+                    candidate_reward=candidate_reward,
+                )
+            )
 
         total_loss = (
             self.trainer_params['preference_loss_weight'] * preference_loss +

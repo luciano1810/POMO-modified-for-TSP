@@ -41,6 +41,7 @@ DEFAULT_BASE_REPLAY_MIX_WEIGHT = 0.1
 DEFAULT_STAGE_NAME = "pref"
 DEFAULT_USE_2OPT_TEACHER_CANDIDATE = False
 DEFAULT_TWO_OPT_TEACHER_MAX_ITERATIONS = 30
+DEFAULT_TEACHER_PREFERENCE_LOSS_WEIGHT = 0.0
 DEFAULT_LORA_ENABLE = False
 DEFAULT_LORA_TARGETS = ["decoder_last"]
 DEFAULT_LORA_RANK = 4
@@ -197,6 +198,13 @@ def build_parser():
                         help="Append one 2-opt-improved teacher tour per instance to the preference candidate pool.")
     parser.add_argument("--two_opt_teacher_max_iterations", type=int, default=DEFAULT_TWO_OPT_TEACHER_MAX_ITERATIONS,
                         help="Maximum first-improvement 2-opt passes used to build each teacher tour.")
+    parser.add_argument("--teacher_preference_loss_weight", type=float,
+                        default=DEFAULT_TEACHER_PREFERENCE_LOSS_WEIGHT,
+                        help=(
+                            "Extra DPO-style loss weight that explicitly treats the appended "
+                            "2-opt teacher tour as chosen against inferior sampled candidates. "
+                            "Requires --use_2opt_teacher_candidate=true."
+                        ))
     parser.add_argument("--preference_gap_weight_power", type=float, default=1.0,
                         help="Exponent applied to normalized chosen-vs-rejected reward gaps.")
     parser.add_argument("--rl_loss_weight", type=float, default=0.2,
@@ -294,6 +302,7 @@ def build_trainer_params(args):
         'use_reference_candidate_pool': args.use_reference_candidate_pool,
         'use_2opt_teacher_candidate': args.use_2opt_teacher_candidate,
         'two_opt_teacher_max_iterations': args.two_opt_teacher_max_iterations,
+        'teacher_preference_loss_weight': args.teacher_preference_loss_weight,
         'preference_gap_weight_power': args.preference_gap_weight_power,
         'rl_loss_weight': args.rl_loss_weight,
         'lora_enable': args.lora_enable,
@@ -357,6 +366,12 @@ def build_logger_params(args):
 
 def main():
     args = build_parser().parse_args()
+    if args.teacher_preference_loss_weight < 0:
+        raise ValueError("--teacher_preference_loss_weight must be non-negative.")
+    if args.teacher_preference_loss_weight > 0 and not args.use_2opt_teacher_candidate:
+        raise ValueError(
+            "--teacher_preference_loss_weight requires --use_2opt_teacher_candidate=true."
+        )
     if args.debug:
         args.train_episodes = 64
         args.curriculum_problem_sizes = args.curriculum_problem_sizes[:2]
