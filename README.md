@@ -288,6 +288,53 @@ python post_train_preference.py \
   --scheduler_gamma 0.3
 ```
 
+### 4.2 可选：用 2-opt teacher 只训练 LoRA adapter
+
+如果已有较好的 post-training checkpoint，可以冻结 POMO 主干，只训练 decoder 上的 LoRA adapter，并用 2-opt 改进后的路径作为训练阶段 teacher candidate。训练保存的 `model_state_dict` 会把 LoRA merge 回普通权重，因此仍然可以直接用标准 `test.py` 评测，推理阶段不需要执行 2-opt。
+
+推荐先从当前最佳 checkpoint 开一个短微调：
+
+```bash
+cd TSP/POMO
+python post_train_preference.py \
+  --init_checkpoint ./result/20260422_214408_post_train__pref__curriculum_150_200_300/checkpoint-80.pt \
+  --reference_checkpoint ./result/20260422_214408_post_train__pref__curriculum_150_200_300/checkpoint-80.pt \
+  --stage_name 2opt_lora_300 \
+  --epochs 6 \
+  --curriculum_problem_sizes 300 \
+  --curriculum_stage_epochs 6 \
+  --base_replay_mix_weight 0 \
+  --previous_stage_mix_weight 0 \
+  --current_stage_mix_weight 1 \
+  --use_2opt_teacher_candidate true \
+  --two_opt_teacher_max_iterations 10 \
+  --lora_enable true \
+  --lora_targets decoder_last \
+  --lora_rank 4 \
+  --lora_alpha 8 \
+  --lora_dropout 0 \
+  --lr 1e-4 \
+  --weight_decay 0 \
+  --rl_loss_weight 0 \
+  --preference_beta 0.03 \
+  --preference_pair_k 2 \
+  --preference_gap_weight_power 0.5 \
+  --batch_schedule 300:4 \
+  --milestones 4 \
+  --scheduler_gamma 0.3
+```
+
+训练完成后，用保存出的普通 checkpoint 评测即可：
+
+```bash
+python test.py \
+  --data_path ../data/val \
+  --checkpoint_path ./result/<run_folder>/checkpoint-6.pt \
+  --augmentation_enable true \
+  --aug_factor 8 \
+  --output_json ./result_lib/2opt_lora_eval.json
+```
+
 ## Suggested Project Workflow
 
 1. 先运行 baseline，记录公开验证集上的 `avg_aug_gap` 和逐实例 `aug_gap`。

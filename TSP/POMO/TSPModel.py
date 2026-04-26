@@ -15,6 +15,38 @@ class TSPModel(nn.Module):
         self.encoded_nodes = None
         # shape: (batch, problem, EMBEDDING_DIM)
 
+    def get_lora_parameters(self):
+        params = []
+        param_names = []
+        for name, param in self.named_parameters():
+            if '_lora.' in name:
+                params.append(param)
+                param_names.append(name)
+        return params, param_names
+
+    def freeze_non_lora_parameters(self):
+        lora_params, _ = self.get_lora_parameters()
+        lora_param_ids = {id(param) for param in lora_params}
+        for param in self.parameters():
+            param.requires_grad_(id(param) in lora_param_ids)
+        return lora_params
+
+    def get_lora_state_dict(self):
+        return {
+            key: value.detach().clone()
+            for key, value in self.state_dict().items()
+            if '_lora.' in key
+        }
+
+    def merged_state_dict(self):
+        merged = {
+            key: value.detach().clone()
+            for key, value in self.state_dict().items()
+            if '_lora.' not in key
+        }
+        self.decoder.merge_lora_into_state_dict(merged, prefix='decoder.')
+        return merged
+
     def pre_forward(self, reset_state):
         self.encoded_nodes = self.encoder(reset_state.problems)
         # shape: (batch, problem, EMBEDDING_DIM)
@@ -208,13 +240,35 @@ class TSP_Decoder(nn.Module):
         embedding_dim = self.model_params['embedding_dim']
         head_num = self.model_params['head_num']
         qkv_dim = self.model_params['qkv_dim']
+        qkv_out_dim = head_num * qkv_dim
 
-        self.Wq_first = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
-        self.Wq_last = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
-        self.Wk = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
-        self.Wv = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
+        self.Wq_first = nn.Linear(embedding_dim, qkv_out_dim, bias=False)
+        self.Wq_last = nn.Linear(embedding_dim, qkv_out_dim, bias=False)
+        self.Wk = nn.Linear(embedding_dim, qkv_out_dim, bias=False)
+        self.Wv = nn.Linear(embedding_dim, qkv_out_dim, bias=False)
 
-        self.multi_head_combine = nn.Linear(head_num * qkv_dim, embedding_dim)
+        self.multi_head_combine = nn.Linear(qkv_out_dim, embedding_dim)
+
+        lora_targets = _resolve_lora_targets(model_params)
+        lora_rank = int(model_params.get('lora_rank', 4))
+        lora_alpha = float(model_params.get('lora_alpha', lora_rank))
+        lora_dropout = float(model_params.get('lora_dropout', 0.0))
+        self.Wq_last_lora = _make_lora_delta(
+            enabled=('decoder_wq_last' in lora_targets),
+            in_features=embedding_dim,
+            out_features=qkv_out_dim,
+            rank=lora_rank,
+            alpha=lora_alpha,
+            dropout=lora_dropout,
+        )
+        self.multi_head_combine_lora = _make_lora_delta(
+            enabled=('decoder_combine' in lora_targets),
+            in_features=qkv_out_dim,
+            out_features=embedding_dim,
+            rank=lora_rank,
+            alpha=lora_alpha,
+            dropout=lora_dropout,
+        )
 
         self.k = None  # saved key, for multi-head attention
         self.v = None  # saved value, for multi-head_attention
@@ -246,7 +300,10 @@ class TSP_Decoder(nn.Module):
 
         #  Multi-Head Attention
         #######################################################
-        q_last = reshape_by_heads(self.Wq_last(encoded_last_node), head_num=head_num)
+        q_last_linear = self.Wq_last(encoded_last_node)
+        if self.Wq_last_lora is not None:
+            q_last_linear = q_last_linear + self.Wq_last_lora(encoded_last_node)
+        q_last = reshape_by_heads(q_last_linear, head_num=head_num)
         # shape: (batch, head_num, pomo, qkv_dim)
 
         q = self.q_first + q_last
@@ -256,6 +313,8 @@ class TSP_Decoder(nn.Module):
         # shape: (batch, pomo, head_num*qkv_dim)
 
         mh_atten_out = self.multi_head_combine(out_concat)
+        if self.multi_head_combine_lora is not None:
+            mh_atten_out = mh_atten_out + self.multi_head_combine_lora(out_concat)
         # shape: (batch, pomo, embedding)
 
         #  Single-Head Attention, for probability calculation
@@ -278,10 +337,70 @@ class TSP_Decoder(nn.Module):
 
         return probs
 
+    def merge_lora_into_state_dict(self, state_dict, prefix):
+        if self.Wq_last_lora is not None:
+            state_dict[prefix + 'Wq_last.weight'] += self.Wq_last_lora.delta_weight().to(
+                state_dict[prefix + 'Wq_last.weight'].device
+            )
+        if self.multi_head_combine_lora is not None:
+            state_dict[prefix + 'multi_head_combine.weight'] += self.multi_head_combine_lora.delta_weight().to(
+                state_dict[prefix + 'multi_head_combine.weight'].device
+            )
+
 
 ########################################
 # NN SUB CLASS / FUNCTIONS
 ########################################
+
+class LoRALinearDelta(nn.Module):
+    def __init__(self, in_features, out_features, rank, alpha, dropout=0.0):
+        super().__init__()
+        if rank <= 0:
+            raise ValueError('LoRA rank must be positive.')
+
+        self.rank = rank
+        self.scaling = alpha / rank
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        self.lora_A = nn.Parameter(torch.empty(rank, in_features))
+        self.lora_B = nn.Parameter(torch.zeros(out_features, rank))
+        nn.init.kaiming_uniform_(self.lora_A, a=5 ** 0.5)
+
+    def forward(self, x):
+        return F.linear(F.linear(self.dropout(x), self.lora_A), self.lora_B) * self.scaling
+
+    def delta_weight(self):
+        return torch.matmul(self.lora_B, self.lora_A) * self.scaling
+
+
+def _make_lora_delta(enabled, in_features, out_features, rank, alpha, dropout):
+    if not enabled:
+        return None
+    return LoRALinearDelta(
+        in_features=in_features,
+        out_features=out_features,
+        rank=rank,
+        alpha=alpha,
+        dropout=dropout,
+    )
+
+
+def _resolve_lora_targets(model_params):
+    if not model_params.get('lora_enable', False):
+        return set()
+
+    raw_targets = model_params.get('lora_targets', ['decoder_last'])
+    if isinstance(raw_targets, str):
+        raw_targets = [raw_targets]
+
+    targets = set()
+    for target in raw_targets:
+        if target == 'decoder_last':
+            targets.update(['decoder_wq_last', 'decoder_combine'])
+        elif target in {'decoder_wq_last', 'decoder_combine'}:
+            targets.add(target)
+        else:
+            raise ValueError(f'Unsupported LoRA target: {target}')
+    return targets
 
 def reshape_by_heads(qkv, head_num):
     # q.shape: (batch, n, head_num*key_dim)   : n can be either 1 or PROBLEM_SIZE

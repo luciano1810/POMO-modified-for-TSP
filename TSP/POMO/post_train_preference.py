@@ -39,6 +39,13 @@ DEFAULT_CURRENT_STAGE_MIX_WEIGHT = 0.7
 DEFAULT_PREVIOUS_STAGE_MIX_WEIGHT = 0.2
 DEFAULT_BASE_REPLAY_MIX_WEIGHT = 0.1
 DEFAULT_STAGE_NAME = "pref"
+DEFAULT_USE_2OPT_TEACHER_CANDIDATE = False
+DEFAULT_TWO_OPT_TEACHER_MAX_ITERATIONS = 30
+DEFAULT_LORA_ENABLE = False
+DEFAULT_LORA_TARGETS = ["decoder_last"]
+DEFAULT_LORA_RANK = 4
+DEFAULT_LORA_ALPHA = 8.0
+DEFAULT_LORA_DROPOUT = 0.0
 
 
 ##########################################################################################
@@ -186,6 +193,10 @@ def build_parser():
                         help="Weight applied to the preference loss.")
     parser.add_argument("--use_reference_candidate_pool", type=str2bool, default=True,
                         help="Augment preference candidates with sampled rollouts from the frozen reference model.")
+    parser.add_argument("--use_2opt_teacher_candidate", type=str2bool, default=DEFAULT_USE_2OPT_TEACHER_CANDIDATE,
+                        help="Append one 2-opt-improved teacher tour per instance to the preference candidate pool.")
+    parser.add_argument("--two_opt_teacher_max_iterations", type=int, default=DEFAULT_TWO_OPT_TEACHER_MAX_ITERATIONS,
+                        help="Maximum first-improvement 2-opt passes used to build each teacher tour.")
     parser.add_argument("--preference_gap_weight_power", type=float, default=1.0,
                         help="Exponent applied to normalized chosen-vs-rejected reward gaps.")
     parser.add_argument("--rl_loss_weight", type=float, default=0.2,
@@ -198,6 +209,21 @@ def build_parser():
                         help="LR decay milestones for MultiStepLR.")
     parser.add_argument("--scheduler_gamma", type=float, default=0.2,
                         help="LR decay factor for MultiStepLR.")
+    parser.add_argument("--lora_enable", type=str2bool, default=DEFAULT_LORA_ENABLE,
+                        help="Freeze the POMO backbone and train only LoRA adapter parameters.")
+    parser.add_argument(
+        "--lora_targets",
+        nargs='+',
+        choices=["decoder_last", "decoder_wq_last", "decoder_combine"],
+        default=DEFAULT_LORA_TARGETS,
+        help="Decoder modules that receive LoRA adapters.",
+    )
+    parser.add_argument("--lora_rank", type=int, default=DEFAULT_LORA_RANK,
+                        help="LoRA adapter rank.")
+    parser.add_argument("--lora_alpha", type=float, default=DEFAULT_LORA_ALPHA,
+                        help="LoRA adapter alpha; effective scale is alpha / rank.")
+    parser.add_argument("--lora_dropout", type=float, default=DEFAULT_LORA_DROPOUT,
+                        help="Dropout applied inside LoRA adapters.")
     parser.add_argument("--use_cuda", type=str2bool, default=DEFAULT_USE_CUDA,
                         help="Whether to use CUDA.")
     parser.add_argument("--cuda_device_num", type=int, default=DEFAULT_CUDA_DEVICE_NUM,
@@ -218,7 +244,7 @@ def build_env_params(args):
     }
 
 
-def build_model_params():
+def build_model_params(args):
     return {
         'embedding_dim': 128,
         'sqrt_embedding_dim': 128**(1/2),
@@ -228,6 +254,11 @@ def build_model_params():
         'logit_clipping': 10,
         'ff_hidden_dim': 512,
         'eval_type': 'argmax',
+        'lora_enable': args.lora_enable,
+        'lora_targets': args.lora_targets,
+        'lora_rank': args.lora_rank,
+        'lora_alpha': args.lora_alpha,
+        'lora_dropout': args.lora_dropout,
     }
 
 
@@ -261,8 +292,15 @@ def build_trainer_params(args):
         'preference_pair_k': args.preference_pair_k,
         'preference_loss_weight': args.preference_loss_weight,
         'use_reference_candidate_pool': args.use_reference_candidate_pool,
+        'use_2opt_teacher_candidate': args.use_2opt_teacher_candidate,
+        'two_opt_teacher_max_iterations': args.two_opt_teacher_max_iterations,
         'preference_gap_weight_power': args.preference_gap_weight_power,
         'rl_loss_weight': args.rl_loss_weight,
+        'lora_enable': args.lora_enable,
+        'lora_targets': args.lora_targets,
+        'lora_rank': args.lora_rank,
+        'lora_alpha': args.lora_alpha,
+        'lora_dropout': args.lora_dropout,
         'curriculum': {
             'problem_sizes': args.curriculum_problem_sizes,
             'stage_epochs': curriculum_stage_epochs,
@@ -329,7 +367,7 @@ def main():
             args.epochs = 4
 
     env_params = build_env_params(args)
-    model_params = build_model_params()
+    model_params = build_model_params(args)
     optimizer_params = build_optimizer_params(args)
     trainer_params = build_trainer_params(args)
     logger_params = build_logger_params(args)

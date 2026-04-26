@@ -41,14 +41,22 @@ class TSPPreferenceTrainer:
         self.device = device
 
         self.model = Model(**self.model_params)
-        self.reference_model = Model(**self.model_params)
+        reference_model_params = dict(self.model_params)
+        reference_model_params['lora_enable'] = False
+        self.reference_model = Model(**reference_model_params)
 
-        self.optimizer = Optimizer(self.model.parameters(), **self.optimizer_params['optimizer'])
-        self.scheduler = Scheduler(self.optimizer, **self.optimizer_params['scheduler'])
+        self.optimizer = None
+        self.scheduler = None
+        self._pending_optimizer_state_dict = None
+        self._pending_scheduler_state_dict = None
 
         self.start_epoch = 1
         self._load_initial_states()
         self._freeze_reference_model()
+        self._configure_trainable_parameters()
+        self.optimizer = Optimizer(self.trainable_params, **self.optimizer_params['optimizer'])
+        self.scheduler = Scheduler(self.optimizer, **self.optimizer_params['scheduler'])
+        self._restore_pending_optimizer_scheduler_states()
 
         self.logger.info(
             'Preference pairing: top-k vs bottom-k with k={} (cartesian pairs per instance).'.format(
@@ -59,6 +67,22 @@ class TSPPreferenceTrainer:
             self.logger.info('Preference candidate pool: current-policy rollouts + sampled reference-policy rollouts.')
         else:
             self.logger.info('Preference candidate pool: current-policy rollouts only.')
+        if self.trainer_params.get('use_2opt_teacher_candidate', False):
+            self.logger.info(
+                'Preference candidate pool: appending one 2-opt teacher tour per instance '
+                '(max_iterations={}).'.format(
+                    self.trainer_params['two_opt_teacher_max_iterations']
+                )
+            )
+        if self.trainer_params.get('lora_enable', False):
+            self.logger.info(
+                'LoRA training enabled: targets={}, rank={}, alpha={}, dropout={}.'.format(
+                    self.trainer_params['lora_targets'],
+                    self.trainer_params['lora_rank'],
+                    self.trainer_params['lora_alpha'],
+                    self.trainer_params['lora_dropout'],
+                )
+            )
         self.logger.info(
             'Preference gap weighting enabled with normalized_gap^{}.'.format(
                 self.trainer_params['preference_gap_weight_power']
@@ -82,13 +106,23 @@ class TSPPreferenceTrainer:
         reference_checkpoint_fullname = model_load.get('reference_path', init_checkpoint_fullname)
 
         init_checkpoint = torch.load(init_checkpoint_fullname, map_location=self.device)
-        self.model.load_state_dict(init_checkpoint['model_state_dict'])
+        self._load_model_state_dict(
+            self.model,
+            init_checkpoint['model_state_dict'],
+            allow_missing_lora=self.trainer_params.get('lora_enable', False),
+            label='trainable model',
+        )
 
         if reference_checkpoint_fullname == init_checkpoint_fullname:
             reference_checkpoint = init_checkpoint
         else:
             reference_checkpoint = torch.load(reference_checkpoint_fullname, map_location=self.device)
-        self.reference_model.load_state_dict(reference_checkpoint['model_state_dict'])
+        self._load_model_state_dict(
+            self.reference_model,
+            reference_checkpoint['model_state_dict'],
+            allow_missing_lora=True,
+            label='reference model',
+        )
 
         total = sum(param.nelement() for param in self.model.parameters())
         self.logger.info('Trainable model initialized from: {}'.format(init_checkpoint_fullname))
@@ -98,7 +132,13 @@ class TSPPreferenceTrainer:
     def _resume_from_checkpoint(self, checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
 
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+        model_state_dict = checkpoint.get('unmerged_model_state_dict', checkpoint['model_state_dict'])
+        self._load_model_state_dict(
+            self.model,
+            model_state_dict,
+            allow_missing_lora=self.trainer_params.get('lora_enable', False),
+            label='resumed trainable model',
+        )
 
         reference_model_state_dict = checkpoint.get('reference_model_state_dict')
         if reference_model_state_dict is None:
@@ -107,13 +147,17 @@ class TSPPreferenceTrainer:
                 'Refusing to fall back to base_checkpoint because resume must preserve '
                 'the exact frozen reference used before interruption.'.format(checkpoint_path)
             )
-        self.reference_model.load_state_dict(reference_model_state_dict)
+        self._load_model_state_dict(
+            self.reference_model,
+            reference_model_state_dict,
+            allow_missing_lora=True,
+            label='resumed reference model',
+        )
 
         if 'optimizer_state_dict' in checkpoint:
-            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            self._move_optimizer_state_to_device()
+            self._pending_optimizer_state_dict = checkpoint['optimizer_state_dict']
         if 'scheduler_state_dict' in checkpoint:
-            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            self._pending_scheduler_state_dict = checkpoint['scheduler_state_dict']
         if 'result_log' in checkpoint:
             self.result_log.set_raw_data(checkpoint['result_log'])
 
@@ -123,6 +167,84 @@ class TSPPreferenceTrainer:
         self.logger.info('Resumed post-training checkpoint from: {}'.format(checkpoint_path))
         self.logger.info('Resume start epoch: {}'.format(self.start_epoch))
         self.logger.info('Number of parameters: %.2fM' % (total / 1e6))
+
+    def _load_model_state_dict(self, model, state_dict, allow_missing_lora, label):
+        try:
+            incompatible = model.load_state_dict(state_dict, strict=not allow_missing_lora)
+        except RuntimeError:
+            if not allow_missing_lora:
+                raise
+            incompatible = model.load_state_dict(state_dict, strict=False)
+
+        missing = list(getattr(incompatible, 'missing_keys', []))
+        unexpected = list(getattr(incompatible, 'unexpected_keys', []))
+        if allow_missing_lora:
+            non_lora_missing = [key for key in missing if '_lora.' not in key]
+            non_lora_unexpected = [key for key in unexpected if '_lora.' not in key]
+            if non_lora_missing:
+                raise KeyError(
+                    '{} checkpoint is missing non-LoRA keys: {}'.format(label, non_lora_missing)
+                )
+            if non_lora_unexpected:
+                self.logger.warning(
+                    '{} checkpoint has unexpected non-LoRA keys: {}'.format(
+                        label,
+                        non_lora_unexpected,
+                    )
+                )
+        elif missing or unexpected:
+            raise KeyError(
+                '{} checkpoint state mismatch. missing={}, unexpected={}'.format(
+                    label,
+                    missing,
+                    unexpected,
+                )
+            )
+
+    def _configure_trainable_parameters(self):
+        if self.trainer_params.get('lora_enable', False):
+            self.trainable_params = self.model.freeze_non_lora_parameters()
+            _, self.trainable_param_names = self.model.get_lora_parameters()
+            if not self.trainable_params:
+                raise ValueError('LoRA is enabled but no LoRA parameters were created.')
+        else:
+            for param in self.model.parameters():
+                param.requires_grad_(True)
+            self.trainable_params = list(self.model.parameters())
+            self.trainable_param_names = [
+                name for name, _ in self.model.named_parameters()
+            ]
+
+        trainable_count = sum(param.nelement() for param in self.trainable_params)
+        total = sum(param.nelement() for param in self.model.parameters())
+        self.logger.info(
+            'Trainable parameters: {} / {} ({:.4f}%).'.format(
+                trainable_count,
+                total,
+                100.0 * trainable_count / max(1, total),
+            )
+        )
+        if self.trainer_params.get('lora_enable', False):
+            self.logger.info('LoRA parameter names: {}'.format(self.trainable_param_names))
+
+    def _restore_pending_optimizer_scheduler_states(self):
+        if self._pending_optimizer_state_dict is not None:
+            try:
+                self.optimizer.load_state_dict(self._pending_optimizer_state_dict)
+                self._move_optimizer_state_to_device()
+            except ValueError as error:
+                self.logger.warning(
+                    'Could not restore optimizer state for current trainable parameter set: {}'.format(error)
+                )
+            self._pending_optimizer_state_dict = None
+        if self._pending_scheduler_state_dict is not None:
+            try:
+                self.scheduler.load_state_dict(self._pending_scheduler_state_dict)
+            except ValueError as error:
+                self.logger.warning(
+                    'Could not restore scheduler state for current optimizer: {}'.format(error)
+                )
+            self._pending_scheduler_state_dict = None
 
     def _move_optimizer_state_to_device(self):
         for state in self.optimizer.state.values():
@@ -134,6 +256,11 @@ class TSPPreferenceTrainer:
         self.reference_model.eval()
         for param in self.reference_model.parameters():
             param.requires_grad_(False)
+
+    def _get_inference_model_state_dict(self):
+        if self.trainer_params.get('lora_enable', False):
+            return self.model.merged_state_dict()
+        return self.model.state_dict()
 
     def _get_curriculum_stage_info(self, epoch):
         curriculum = self.trainer_params['curriculum']
@@ -298,6 +425,15 @@ class TSPPreferenceTrainer:
         env = Env(problem_size=problem_size, pomo_size=problem_size)
         return env
 
+    def _build_env_from_problems(self, problems, pomo_size):
+        env = Env(problem_size=problems.size(1), pomo_size=pomo_size)
+        env.batch_size = problems.size(0)
+        env.problems = problems
+        device = problems.device
+        env.BATCH_IDX = torch.arange(env.batch_size, device=device)[:, None].expand(env.batch_size, pomo_size)
+        env.POMO_IDX = torch.arange(pomo_size, device=device)[None, :].expand(env.batch_size, pomo_size)
+        return env
+
     def run(self):
         self.time_estimator.reset(self.start_epoch)
 
@@ -355,7 +491,9 @@ class TSPPreferenceTrainer:
                 self.logger.info("Saving trained_model")
                 checkpoint_dict = {
                     'epoch': epoch,
-                    'model_state_dict': self.model.state_dict(),
+                    # When LoRA is enabled, this is merged into base weights so existing
+                    # test.py can load the checkpoint without constructing adapter modules.
+                    'model_state_dict': self._get_inference_model_state_dict(),
                     'reference_model_state_dict': self.reference_model.state_dict(),
                     'reference_is_frozen_from_run_start': True,
                     'optimizer_state_dict': self.optimizer.state_dict(),
@@ -381,8 +519,18 @@ class TSPPreferenceTrainer:
                     'preference_beta': self.trainer_params['preference_beta'],
                     'preference_pair_k': self.trainer_params['preference_pair_k'],
                     'use_reference_candidate_pool': self.trainer_params['use_reference_candidate_pool'],
+                    'use_2opt_teacher_candidate': self.trainer_params.get('use_2opt_teacher_candidate', False),
+                    'two_opt_teacher_max_iterations': self.trainer_params.get('two_opt_teacher_max_iterations'),
                     'preference_gap_weight_power': self.trainer_params['preference_gap_weight_power'],
+                    'lora_enable': self.trainer_params.get('lora_enable', False),
+                    'lora_targets': self.trainer_params.get('lora_targets'),
+                    'lora_rank': self.trainer_params.get('lora_rank'),
+                    'lora_alpha': self.trainer_params.get('lora_alpha'),
+                    'lora_dropout': self.trainer_params.get('lora_dropout'),
                 }
+                if self.trainer_params.get('lora_enable', False):
+                    checkpoint_dict['unmerged_model_state_dict'] = self.model.state_dict()
+                    checkpoint_dict['lora_state_dict'] = self.model.get_lora_state_dict()
                 torch.save(checkpoint_dict, '{}/checkpoint-{}.pt'.format(self.result_folder, epoch))
 
             if all_done or (epoch % img_save_interval) == 0:
@@ -541,6 +689,109 @@ class TSPPreferenceTrainer:
         log_prob = prob_list.clamp_min(1e-12).log().sum(dim=2)
         return reward, log_prob, selected_actions
 
+    def _two_opt_tour(self, tour, dist_matrix, max_iterations):
+        tour = list(tour)
+        node_count = len(tour)
+        if node_count < 4 or max_iterations <= 0:
+            return tour
+
+        iteration = 0
+        improved = True
+        while improved and iteration < max_iterations:
+            improved = False
+            iteration += 1
+
+            for left_idx in range(1, node_count - 1):
+                for right_idx in range(left_idx + 1, node_count):
+                    prev_left = tour[left_idx - 1]
+                    left = tour[left_idx]
+                    right = tour[right_idx]
+                    next_right = tour[(right_idx + 1) % node_count]
+
+                    delta = (
+                        dist_matrix[prev_left, right] +
+                        dist_matrix[left, next_right] -
+                        dist_matrix[prev_left, left] -
+                        dist_matrix[right, next_right]
+                    )
+                    if float(delta) < -1e-9:
+                        tour[left_idx:right_idx + 1] = reversed(tour[left_idx:right_idx + 1])
+                        improved = True
+                        break
+                if improved:
+                    break
+
+        return tour
+
+    def _build_2opt_teacher_actions(self, problems, source_actions):
+        max_iterations = int(self.trainer_params['two_opt_teacher_max_iterations'])
+        problems_cpu = problems.detach().cpu()
+        source_actions_cpu = source_actions.detach().cpu()
+
+        teacher_actions = []
+        for batch_idx in range(problems_cpu.size(0)):
+            coords = problems_cpu[batch_idx]
+            dist_matrix = torch.cdist(coords, coords, p=2)
+            source_tour = source_actions_cpu[batch_idx].tolist()
+            teacher_tour = self._two_opt_tour(
+                source_tour,
+                dist_matrix,
+                max_iterations=max_iterations,
+            )
+            teacher_actions.append(torch.tensor(teacher_tour, dtype=torch.long, device='cpu'))
+
+        return torch.stack(teacher_actions, dim=0).to(self.device)[:, None, :]
+
+    def _append_2opt_teacher_candidate(
+        self,
+        problems,
+        candidate_reward,
+        candidate_log_prob,
+        candidate_ref_log_prob,
+        candidate_actions,
+    ):
+        best_candidate_idx = candidate_reward.argmax(dim=1)
+        batch_idx = torch.arange(candidate_reward.size(0), device=candidate_reward.device)
+        source_actions = candidate_actions[batch_idx, best_candidate_idx]
+        teacher_actions = self._build_2opt_teacher_actions(
+            problems=problems,
+            source_actions=source_actions,
+        )
+
+        teacher_env = self._build_env_from_problems(
+            problems=problems,
+            pomo_size=teacher_actions.size(1),
+        )
+        teacher_reward, teacher_prob_list, _ = self._rollout(
+            self.model,
+            teacher_env,
+            collect_prob=True,
+            no_grad=False,
+            forced_actions=teacher_actions.detach(),
+        )
+        teacher_log_prob = teacher_prob_list.clamp_min(1e-12).log().sum(dim=2)
+
+        self.reference_model.eval()
+        ref_teacher_env = self._build_env_from_problems(
+            problems=problems,
+            pomo_size=teacher_actions.size(1),
+        )
+        _, ref_teacher_prob_list, _ = self._rollout(
+            self.reference_model,
+            ref_teacher_env,
+            collect_prob=True,
+            no_grad=True,
+            forced_actions=teacher_actions.detach(),
+        )
+        teacher_ref_log_prob = ref_teacher_prob_list.clamp_min(1e-12).log().sum(dim=2)
+
+        return (
+            torch.cat((candidate_reward, teacher_reward), dim=1),
+            torch.cat((candidate_log_prob, teacher_log_prob), dim=1),
+            torch.cat((candidate_ref_log_prob, teacher_ref_log_prob), dim=1),
+            torch.cat((candidate_actions, teacher_actions), dim=1),
+        )
+
     def _compute_gap_weighted_preference_loss(
         self,
         preference_logits,
@@ -593,6 +844,7 @@ class TSPPreferenceTrainer:
         candidate_reward = reward
         candidate_log_prob = log_prob
         candidate_ref_log_prob = ref_log_prob
+        candidate_actions = selected_actions
         if self.trainer_params['use_reference_candidate_pool']:
             ref_candidate_reward, ref_candidate_log_prob, ref_candidate_actions = self._sample_reference_candidates(env)
             _, current_on_ref_prob_list, _ = self._rollout(
@@ -607,6 +859,21 @@ class TSPPreferenceTrainer:
             candidate_reward = torch.cat((candidate_reward, ref_candidate_reward), dim=1)
             candidate_log_prob = torch.cat((candidate_log_prob, current_on_ref_log_prob), dim=1)
             candidate_ref_log_prob = torch.cat((candidate_ref_log_prob, ref_candidate_log_prob), dim=1)
+            candidate_actions = torch.cat((candidate_actions, ref_candidate_actions), dim=1)
+
+        if self.trainer_params.get('use_2opt_teacher_candidate', False):
+            (
+                candidate_reward,
+                candidate_log_prob,
+                candidate_ref_log_prob,
+                candidate_actions,
+            ) = self._append_2opt_teacher_candidate(
+                problems=env.problems,
+                candidate_reward=candidate_reward,
+                candidate_log_prob=candidate_log_prob,
+                candidate_ref_log_prob=candidate_ref_log_prob,
+                candidate_actions=candidate_actions,
+            )
 
         chosen_idx, rejected_idx, _ = self._build_preference_pair_indices(
             candidate_reward,
