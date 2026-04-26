@@ -630,7 +630,7 @@ class TSPPreferenceTrainer:
         return score_AM.avg, loss_AM.avg, pref_loss_AM.avg, rl_loss_AM.avg
 
     def _rollout(self, model, env, collect_prob, no_grad=False, forced_actions=None):
-        context = torch.inference_mode() if no_grad else nullcontext()
+        context = torch.no_grad() if no_grad else nullcontext()
         with context:
             reset_state, _, _ = env.reset()
             model.pre_forward(reset_state)
@@ -709,8 +709,9 @@ class TSPPreferenceTrainer:
         )
         valid_swap_mask[0, :] = False
         valid_swap_mask[-1, :] = False
+        flat_position = torch.arange(problem_size * problem_size, device=device)
 
-        with torch.inference_mode():
+        with torch.no_grad():
             dist_matrix = torch.cdist(problems.detach(), problems.detach(), p=2)
             batch_idx = torch.arange(batch_size, device=device)[:, None, None]
 
@@ -727,11 +728,17 @@ class TSPPreferenceTrainer:
                     dist_matrix[batch_idx, right[:, None, :], next_right[:, None, :]]
                 )
                 delta = delta.masked_fill(~valid_swap_mask[None, :, :], inf)
-                best_delta, flat_idx = delta.reshape(batch_size, -1).min(dim=1)
-                improved = best_delta < -1e-9
+
+                improvement = delta.reshape(batch_size, -1) < -1e-9
+                first_improvement = flat_position[None, :].masked_fill(
+                    ~improvement,
+                    problem_size * problem_size,
+                ).min(dim=1).values
+                improved = first_improvement < problem_size * problem_size
                 if not bool(improved.any()):
                     break
 
+                flat_idx = first_improvement.clamp_max(problem_size * problem_size - 1)
                 left_idx = (flat_idx // problem_size)[:, None]
                 right_idx = (flat_idx % problem_size)[:, None]
                 position_2d = position[None, :].expand(batch_size, problem_size)
