@@ -445,16 +445,14 @@ $$
 - `150`
 - `200`
 - `300`
-- `500`
 
 训练器会把总 epoch 切成若干阶段，[TSP/POMO/TSPPreferenceTrainer.py](/Users/syw/Desktop/深度学习与大模型/project/SDM-5031-2026-Spring/TSP/POMO/TSPPreferenceTrainer.py:119)。
 
-如果总共训练 `100` 个 epoch，那么默认可以理解为：
+如果总共训练 `90` 个 epoch，那么默认可以理解为：
 
 - 第 1 阶段：先适应 `150`
 - 第 2 阶段：再适应 `200`
 - 第 3 阶段：再适应 `300`
-- 第 4 阶段：最后适应 `500`
 
 ### 7.3 为什么这种由小到大的顺序合理
 
@@ -563,9 +561,39 @@ $$
 
 ---
 
-## 10. 如果写课程报告，哪些是主方法，哪些是辅助设计
+## 10. 新增：多阶段 post-training 流水线
 
-### 10.1 最适合写成“方法贡献”的部分
+上面的“Base POMO -> Preference Post-Training -> EAS”是系统层面的三段结构。为了进一步降低 `avg_aug_gap`，现在训练侧也支持把 preference post-training 本身拆成多个阶段。
+
+关键代码变化是：
+
+- [TSP/POMO/post_train_preference.py](/Users/syw/Desktop/深度学习与大模型/project/SDM-5031-2026-Spring/TSP/POMO/post_train_preference.py:116) 增加 `--init_checkpoint` 和 `--reference_checkpoint`，可以把可训练模型和 frozen reference 分开指定。
+- [TSP/POMO/TSPPreferenceTrainer.py](/Users/syw/Desktop/深度学习与大模型/project/SDM-5031-2026-Spring/TSP/POMO/TSPPreferenceTrainer.py:71) 会分别加载这两个 checkpoint。
+- [TSP/POMO/post_train_staged.py](/Users/syw/Desktop/深度学习与大模型/project/SDM-5031-2026-Spring/TSP/POMO/post_train_staged.py:1) 提供推荐的三阶段运行脚本。
+
+这和 `--resume_checkpoint` 的语义不同：
+
+- `resume_checkpoint` 用于训练中断后恢复，会沿用中断时的 reference、optimizer、scheduler。
+- `init_checkpoint/reference_checkpoint` 用于开一个新的 post-training 阶段，会重置 optimizer/scheduler，并把上一阶段模型刷新为新的 reference。
+
+推荐训练侧三阶段如下：
+
+1. **Stage 1: scale DPO**
+   从原始 POMO baseline 出发，跑 `150/200/300` curriculum。这对应当前已有的第一阶段。
+
+2. **Stage 2: refreshed-reference large-scale transfer**
+   用 Stage 1 最佳 checkpoint 同时作为初始化和 frozen reference，降低学习率，跑 `200/300/500`。这样做的目的不是单纯延长训练，而是让 DPO 对照点从原始 baseline 刷新到更强的 Stage 1 policy，继续提供局部有效的偏好梯度。
+
+3. **Stage 3: low-LR consolidation**
+   用 Stage 2 最佳 checkpoint 再刷新 reference，低学习率回放 `100/150/200/300`。这个阶段的作用是稳定公开验证集和隐藏测试中常见的中小规模实例，避免 Stage 2 只向更大规模迁移后损伤 `100/150/200/300` 上的 gap。
+
+这个流水线的目标是优先优化标准 `avg_aug_gap`。实际提交前仍需要用 `test.py --augmentation_enable true --aug_factor 8` 对每个阶段的候选 checkpoint 做选择，而不是默认取最后一个 epoch。
+
+---
+
+## 11. 如果写课程报告，哪些是主方法，哪些是辅助设计
+
+### 11.1 最适合写成“方法贡献”的部分
 
 如果要突出方法创新，最值得重点写的是这两项：
 
@@ -575,12 +603,12 @@ $$
 2. **Curriculum Adaptation to Larger TSP Sizes**  
    这是从训练分布层面做的增强，核心是让模型从 `TSP100` 平滑迁移到更大规模。
 
-### 10.2 更适合作为实验增强或附加模块的部分
+### 11.2 更适合作为实验增强或附加模块的部分
 
 - **Independent EAS evaluation**
 - **TSPLIB-aware standardized evaluation**
 
-### 10.3 更适合作为工程实现细节的部分
+### 11.3 更适合作为工程实现细节的部分
 
 - OOM 自动缩 batch
 - Resume from checkpoint
@@ -588,7 +616,7 @@ $$
 
 ---
 
-## 11. 最后的总结
+## 12. 最后的总结
 
 相对原始 POMO，当前项目的变化可以一句话概括为：
 

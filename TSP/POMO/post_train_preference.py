@@ -38,6 +38,7 @@ DEFAULT_BASE_REPLAY_PROBLEM_SIZE = 100
 DEFAULT_CURRENT_STAGE_MIX_WEIGHT = 0.7
 DEFAULT_PREVIOUS_STAGE_MIX_WEIGHT = 0.2
 DEFAULT_BASE_REPLAY_MIX_WEIGHT = 0.1
+DEFAULT_STAGE_NAME = "pref"
 
 
 ##########################################################################################
@@ -103,6 +104,14 @@ def resolve_curriculum_stage_epochs(args):
     ]
 
 
+def resolve_init_checkpoint(args):
+    return args.init_checkpoint if args.init_checkpoint is not None else args.base_checkpoint
+
+
+def resolve_reference_checkpoint(args):
+    return args.reference_checkpoint if args.reference_checkpoint is not None else resolve_init_checkpoint(args)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
@@ -111,9 +120,26 @@ def build_parser():
         )
     )
     parser.add_argument("--base_checkpoint", default=DEFAULT_BASE_CHECKPOINT,
-                        help="Checkpoint used as both initialization and frozen reference model.")
+                        help=(
+                            "Backward-compatible default checkpoint. Used as initialization and "
+                            "frozen reference unless --init_checkpoint/--reference_checkpoint are set."
+                        ))
+    parser.add_argument("--init_checkpoint", default=None,
+                        help=(
+                            "Checkpoint used to initialize the trainable model for this post-training "
+                            "stage. Defaults to --base_checkpoint."
+                        ))
+    parser.add_argument("--reference_checkpoint", default=None,
+                        help=(
+                            "Checkpoint used to initialize the frozen reference model. Defaults to "
+                            "--init_checkpoint when provided, otherwise --base_checkpoint."
+                        ))
     parser.add_argument("--resume_checkpoint", default=None,
                         help="Resume an interrupted post-training run from a saved checkpoint.")
+    parser.add_argument("--stage_name", default=DEFAULT_STAGE_NAME,
+                        help="Short name included in result folder and checkpoint metadata.")
+    parser.add_argument("--result_dir", default=None,
+                        help="Optional explicit result directory for this run.")
     parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS,
                         help="Number of post-training epochs.")
     parser.add_argument("--train_episodes", type=int, default=2048,
@@ -220,9 +246,12 @@ def build_optimizer_params(args):
 
 def build_trainer_params(args):
     curriculum_stage_epochs = resolve_curriculum_stage_epochs(args)
+    init_checkpoint = os.path.abspath(resolve_init_checkpoint(args))
+    reference_checkpoint = os.path.abspath(resolve_reference_checkpoint(args))
     return {
         'use_cuda': args.use_cuda,
         'cuda_device_num': args.cuda_device_num,
+        'stage_name': args.stage_name,
         'epochs': args.epochs,
         'train_episodes': args.train_episodes,
         'train_batch_size': args.train_batch_size,
@@ -256,7 +285,10 @@ def build_trainer_params(args):
         },
         'model_load': {
             'enable': True,
-            'path': os.path.abspath(args.base_checkpoint),
+            # `path` is kept for compatibility with older checkpoints/log readers.
+            'path': init_checkpoint,
+            'init_path': init_checkpoint,
+            'reference_path': reference_checkpoint,
         },
         'resume_load': {
             'enable': args.resume_checkpoint is not None,
@@ -266,12 +298,19 @@ def build_trainer_params(args):
 
 
 def build_logger_params(args):
-    desc = 'post_train__pref__curriculum_{}'.format('_'.join(map(str, args.curriculum_problem_sizes)))
+    stage_name = (args.stage_name or DEFAULT_STAGE_NAME).strip() or DEFAULT_STAGE_NAME
+    desc = 'post_train__{}__curriculum_{}'.format(
+        stage_name,
+        '_'.join(map(str, args.curriculum_problem_sizes)),
+    )
+    log_file = {
+        'desc': desc,
+        'filename': 'log.txt'
+    }
+    if args.result_dir is not None:
+        log_file['filepath'] = os.path.abspath(args.result_dir)
     return {
-        'log_file': {
-            'desc': desc,
-            'filename': 'log.txt'
-        }
+        'log_file': log_file
     }
 
 
@@ -315,10 +354,13 @@ def _print_config(args, env_params, model_params, optimizer_params, trainer_para
     logger.info('model_params{}'.format(model_params))
     logger.info('optimizer_params{}'.format(optimizer_params))
     logger.info('trainer_params{}'.format(trainer_params))
+    logger.info('init_checkpoint: {}'.format(os.path.abspath(resolve_init_checkpoint(args))))
+    logger.info('reference_checkpoint: {}'.format(os.path.abspath(resolve_reference_checkpoint(args))))
+    if args.result_dir is not None:
+        logger.info('result_dir: {}'.format(os.path.abspath(args.result_dir)))
     logger.info(
         'Preference post-training uses a frozen reference checkpoint, top-k vs bottom-k '
-        'multi-pair preference supervision, a 90-epoch mixed-replay curriculum over 150/200/300 by default '
-        '(20/30/40 epochs per stage), '
+        'multi-pair preference supervision, a mixed-replay curriculum, '
         'and reward-gap weighted preference loss.'
     )
 

@@ -232,6 +232,58 @@ python post_train_preference.py \
 
 `resume` 现在会严格从中断时保存的 `reference_model_state_dict` 恢复 reference，不会再回退到 `--base_checkpoint`。这样可以保证恢复训练前后使用的是同一份冻结 reference。
 
+### 4.1 推荐：继续跑第二、第三阶段 post-training
+
+如果第一阶段 checkpoint 还没把公开验证集 `avg_aug_gap` 压到 `0.8%` 内，建议不要用 `--resume_checkpoint` 继续堆 epoch。`resume` 是给中断恢复用的，会沿用上一轮 optimizer/scheduler 和旧 reference；第二、第三阶段更适合启动一个新的 post-training run：
+
+- 第 1 阶段：从原始 POMO baseline 出发，跑现有 `150/200/300` preference curriculum。
+- 第 2 阶段：用第 1 阶段最佳 checkpoint 同时作为 `init_checkpoint` 和新的 frozen reference，降低学习率，并加入 `500` 规模提升大规模泛化。
+- 第 3 阶段：用第 2 阶段最佳 checkpoint 刷新 reference，低学习率回放 `100/150/200/300`，做最终稳定化，避免只优化大规模后损伤公开验证集常见规模。
+
+可以直接使用阶段流水线脚本：
+
+```bash
+cd TSP/POMO
+python post_train_staged.py \
+  --base_checkpoint ./result/saved_tsp100_model2_longTrain/checkpoint-3000.pt \
+  --use_cuda true \
+  --cuda_device_num 0 \
+  --eval_after_stage true \
+  --eval_data_path ../data/val
+```
+
+如果已经有第一阶段 checkpoint，只跑第二、第三阶段：
+
+```bash
+cd TSP/POMO
+python post_train_staged.py \
+  --start_stage 2 \
+  --stage1_checkpoint ./result/20260422_214408_post_train__pref__curriculum_150_200_300/checkpoint-90.pt \
+  --use_cuda true \
+  --cuda_device_num 0 \
+  --eval_after_stage true
+```
+
+也可以手动运行单个阶段。关键是使用 `--init_checkpoint` 和 `--reference_checkpoint` 开新阶段，而不是 `--resume_checkpoint`：
+
+```bash
+python post_train_preference.py \
+  --stage_name stage2_ref_refresh_200_300_500 \
+  --init_checkpoint /path/to/stage1_best.pt \
+  --reference_checkpoint /path/to/stage1_best.pt \
+  --epochs 80 \
+  --curriculum_problem_sizes 200 300 500 \
+  --curriculum_stage_epochs 20 30 30 \
+  --batch_schedule 100:24,150:20,200:16,300:8,500:2 \
+  --preference_beta 0.07 \
+  --preference_pair_k 6 \
+  --preference_gap_weight_power 1.5 \
+  --rl_loss_weight 0.10 \
+  --lr 2e-5 \
+  --milestones 50 65 \
+  --scheduler_gamma 0.3
+```
+
 ## Suggested Project Workflow
 
 1. 先运行 baseline，记录公开验证集上的 `avg_aug_gap` 和逐实例 `aug_gap`。

@@ -78,13 +78,21 @@ class TSPPreferenceTrainer:
             return
 
         checkpoint_fullname = model_load['path']
-        checkpoint = torch.load(checkpoint_fullname, map_location=self.device)
-        model_state_dict = checkpoint['model_state_dict']
-        self.model.load_state_dict(model_state_dict)
-        self.reference_model.load_state_dict(model_state_dict)
+        init_checkpoint_fullname = model_load.get('init_path', checkpoint_fullname)
+        reference_checkpoint_fullname = model_load.get('reference_path', init_checkpoint_fullname)
+
+        init_checkpoint = torch.load(init_checkpoint_fullname, map_location=self.device)
+        self.model.load_state_dict(init_checkpoint['model_state_dict'])
+
+        if reference_checkpoint_fullname == init_checkpoint_fullname:
+            reference_checkpoint = init_checkpoint
+        else:
+            reference_checkpoint = torch.load(reference_checkpoint_fullname, map_location=self.device)
+        self.reference_model.load_state_dict(reference_checkpoint['model_state_dict'])
 
         total = sum(param.nelement() for param in self.model.parameters())
-        self.logger.info('Reference checkpoint loaded from: {}'.format(checkpoint_fullname))
+        self.logger.info('Trainable model initialized from: {}'.format(init_checkpoint_fullname))
+        self.logger.info('Frozen reference checkpoint loaded from: {}'.format(reference_checkpoint_fullname))
         self.logger.info('Number of parameters: %.2fM' % (total / 1e6))
 
     def _resume_from_checkpoint(self, checkpoint_path):
@@ -361,6 +369,15 @@ class TSPPreferenceTrainer:
                         'previous_stage': self.trainer_params['curriculum']['previous_stage_mix_weight'],
                         'base_replay': self.trainer_params['curriculum']['base_replay_mix_weight'],
                     },
+                    'post_training_stage_name': self.trainer_params.get('stage_name'),
+                    'init_checkpoint_path': self.trainer_params['model_load'].get(
+                        'init_path',
+                        self.trainer_params['model_load'].get('path'),
+                    ),
+                    'reference_checkpoint_path': self.trainer_params['model_load'].get(
+                        'reference_path',
+                        self.trainer_params['model_load'].get('path'),
+                    ),
                     'preference_beta': self.trainer_params['preference_beta'],
                     'preference_pair_k': self.trainer_params['preference_pair_k'],
                     'use_reference_candidate_pool': self.trainer_params['use_reference_candidate_pool'],
