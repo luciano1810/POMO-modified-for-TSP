@@ -232,19 +232,23 @@ python post_train_preference.py \
 
 `resume` 现在会严格从中断时保存的 `reference_model_state_dict` 恢复 reference，不会再回退到 `--base_checkpoint`。这样可以保证恢复训练前后使用的是同一份冻结 reference。
 
-### 4.1 推荐：继续跑第二、第三阶段 post-training
+### 4.1 推荐：在 3000epoch POMO 后继续跑第二、第三阶段 post-training
 
-如果第一阶段 checkpoint 还没把公开验证集 `avg_aug_gap` 压到 `0.8%` 内，建议不要用 `--resume_checkpoint` 继续堆 epoch。`resume` 是给中断恢复用的，会沿用上一轮 optimizer/scheduler 和旧 reference；第二、第三阶段更适合启动一个新的 post-training run：
+`checkpoint-3000.pt` 已经是第一阶段：原版 POMO 在 `TSP100` 上训练 3000 epoch 后得到的 base checkpoint。后面要提升 `avg_aug_gap`，应该在它之后继续做第二、第三阶段 post-training，而不是把它当作还没训练过的初始模型。
 
-- 第 1 阶段：从原始 POMO baseline 出发，跑现有 `150/200/300` preference curriculum。
-- 第 2 阶段：用第 1 阶段最佳 checkpoint 同时作为 `init_checkpoint` 和新的 frozen reference，降低学习率，并加入 `500` 规模提升大规模泛化。
-- 第 3 阶段：用第 2 阶段最佳 checkpoint 刷新 reference，低学习率回放 `100/150/200/300`，做最终稳定化，避免只优化大规模后损伤公开验证集常见规模。
+建议不要用 `--resume_checkpoint` 来启动新阶段。`resume` 是给中断恢复用的，会沿用上一轮 optimizer/scheduler 和旧 reference；第二、第三阶段更适合启动新的 post-training run：
+
+- 第 1 阶段：原版 POMO base training，产物是 `checkpoint-3000.pt`。
+- 第 2 阶段：从 `checkpoint-3000.pt` 出发，跑 `150/200/300` preference curriculum。
+- 第 3 阶段：用第 2 阶段最佳 checkpoint 同时作为 `init_checkpoint` 和新的 frozen reference，降低学习率，并加入 `500` 规模提升大规模泛化。
 
 可以直接使用阶段流水线脚本：
 
 ```bash
 cd TSP/POMO
 python post_train_staged.py \
+  --start_stage 2 \
+  --stop_stage 3 \
   --base_checkpoint ./result/saved_tsp100_model2_longTrain/checkpoint-3000.pt \
   --use_cuda true \
   --cuda_device_num 0 \
@@ -252,13 +256,13 @@ python post_train_staged.py \
   --eval_data_path ../data/val
 ```
 
-如果已经有第一阶段 checkpoint，只跑第二、第三阶段：
+如果已经有 `150/200/300` preference curriculum 的 checkpoint，例如当前仓库里的 `checkpoint-90.pt`，它应视为第二阶段产物，可以只跑第三阶段：
 
 ```bash
 cd TSP/POMO
 python post_train_staged.py \
-  --start_stage 2 \
-  --stage1_checkpoint ./result/20260422_214408_post_train__pref__curriculum_150_200_300/checkpoint-90.pt \
+  --start_stage 3 \
+  --stage2_checkpoint ./result/20260422_214408_post_train__pref__curriculum_150_200_300/checkpoint-90.pt \
   --use_cuda true \
   --cuda_device_num 0 \
   --eval_after_stage true
@@ -268,9 +272,9 @@ python post_train_staged.py \
 
 ```bash
 python post_train_preference.py \
-  --stage_name stage2_ref_refresh_200_300_500 \
-  --init_checkpoint /path/to/stage1_best.pt \
-  --reference_checkpoint /path/to/stage1_best.pt \
+  --stage_name stage3_ref_refresh_200_300_500 \
+  --init_checkpoint /path/to/stage2_best.pt \
+  --reference_checkpoint /path/to/stage2_best.pt \
   --epochs 80 \
   --curriculum_problem_sizes 200 300 500 \
   --curriculum_stage_epochs 20 30 30 \

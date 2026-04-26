@@ -561,31 +561,31 @@ $$
 
 ---
 
-## 10. 新增：多阶段 post-training 流水线
+## 10. 新增：第二、第三阶段 post-training 流水线
 
-上面的“Base POMO -> Preference Post-Training -> EAS”是系统层面的三段结构。为了进一步降低 `avg_aug_gap`，现在训练侧也支持把 preference post-training 本身拆成多个阶段。
+`checkpoint-3000.pt` 已经是第一阶段：原版 POMO 在 `TSP100` 上训练 3000 epoch 后得到的 base checkpoint。为了进一步降低 `avg_aug_gap`，现在训练侧在这个 checkpoint 之后继续增加第二、第三阶段 post-training。
 
 关键代码变化是：
 
 - [TSP/POMO/post_train_preference.py](/Users/syw/Desktop/深度学习与大模型/project/SDM-5031-2026-Spring/TSP/POMO/post_train_preference.py:116) 增加 `--init_checkpoint` 和 `--reference_checkpoint`，可以把可训练模型和 frozen reference 分开指定。
 - [TSP/POMO/TSPPreferenceTrainer.py](/Users/syw/Desktop/深度学习与大模型/project/SDM-5031-2026-Spring/TSP/POMO/TSPPreferenceTrainer.py:71) 会分别加载这两个 checkpoint。
-- [TSP/POMO/post_train_staged.py](/Users/syw/Desktop/深度学习与大模型/project/SDM-5031-2026-Spring/TSP/POMO/post_train_staged.py:1) 提供推荐的三阶段运行脚本。
+- [TSP/POMO/post_train_staged.py](/Users/syw/Desktop/深度学习与大模型/project/SDM-5031-2026-Spring/TSP/POMO/post_train_staged.py:1) 提供推荐的第二、第三阶段运行脚本。
 
 这和 `--resume_checkpoint` 的语义不同：
 
 - `resume_checkpoint` 用于训练中断后恢复，会沿用中断时的 reference、optimizer、scheduler。
 - `init_checkpoint/reference_checkpoint` 用于开一个新的 post-training 阶段，会重置 optimizer/scheduler，并把上一阶段模型刷新为新的 reference。
 
-推荐训练侧三阶段如下：
+推荐训练侧三阶段如下，其中第一阶段就是已有的 3000epoch POMO checkpoint：
 
-1. **Stage 1: scale DPO**
-   从原始 POMO baseline 出发，跑 `150/200/300` curriculum。这对应当前已有的第一阶段。
+1. **Stage 1: base POMO training**
+   原版 POMO 在 `TSP100` 上训练 3000 epoch，产出 `checkpoint-3000.pt`。
 
-2. **Stage 2: refreshed-reference large-scale transfer**
-   用 Stage 1 最佳 checkpoint 同时作为初始化和 frozen reference，降低学习率，跑 `200/300/500`。这样做的目的不是单纯延长训练，而是让 DPO 对照点从原始 baseline 刷新到更强的 Stage 1 policy，继续提供局部有效的偏好梯度。
+2. **Stage 2: scale DPO**
+   从 `checkpoint-3000.pt` 出发，跑 `150/200/300` curriculum。这个阶段对应当前已有的 preference curriculum checkpoint。
 
-3. **Stage 3: low-LR consolidation**
-   用 Stage 2 最佳 checkpoint 再刷新 reference，低学习率回放 `100/150/200/300`。这个阶段的作用是稳定公开验证集和隐藏测试中常见的中小规模实例，避免 Stage 2 只向更大规模迁移后损伤 `100/150/200/300` 上的 gap。
+3. **Stage 3: refreshed-reference large-scale transfer**
+   用 Stage 2 最佳 checkpoint 同时作为初始化和 frozen reference，降低学习率，跑 `200/300/500`。这样做的目的不是单纯延长训练，而是让 DPO 对照点从原始 baseline 刷新到更强的 Stage 2 policy，继续提供局部有效的偏好梯度。
 
 这个流水线的目标是优先优化标准 `avg_aug_gap`。实际提交前仍需要用 `test.py --augmentation_enable true --aug_factor 8` 对每个阶段的候选 checkpoint 做选择，而不是默认取最后一个 epoch。
 

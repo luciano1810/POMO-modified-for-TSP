@@ -14,8 +14,8 @@ DEFAULT_DATA_PATH = "../data/val"
 
 STAGE_CONFIGS = [
     {
-        "idx": 1,
-        "name": "stage1_scale_dpo",
+        "idx": 2,
+        "name": "stage2_scale_dpo",
         "epochs": 90,
         "train_episodes": 2048,
         "curriculum_problem_sizes": [150, 200, 300],
@@ -34,8 +34,8 @@ STAGE_CONFIGS = [
         "scheduler_gamma": 0.2,
     },
     {
-        "idx": 2,
-        "name": "stage2_ref_refresh_200_300_500",
+        "idx": 3,
+        "name": "stage3_ref_refresh_200_300_500",
         "epochs": 80,
         "train_episodes": 2048,
         "curriculum_problem_sizes": [200, 300, 500],
@@ -51,26 +51,6 @@ STAGE_CONFIGS = [
         "lr": 2e-5,
         "weight_decay": 1e-6,
         "milestones": [50, 65],
-        "scheduler_gamma": 0.3,
-    },
-    {
-        "idx": 3,
-        "name": "stage3_low_lr_consolidation",
-        "epochs": 40,
-        "train_episodes": 3072,
-        "curriculum_problem_sizes": [100, 150, 200, 300],
-        "curriculum_stage_epochs": [8, 10, 10, 12],
-        "batch_schedule": "100:32,150:24,200:16,300:8,500:2",
-        "current_stage_mix_weight": 0.60,
-        "previous_stage_mix_weight": 0.25,
-        "base_replay_mix_weight": 0.15,
-        "preference_beta": 0.05,
-        "preference_pair_k": 8,
-        "preference_gap_weight_power": 1.5,
-        "rl_loss_weight": 0.05,
-        "lr": 8e-6,
-        "weight_decay": 1e-6,
-        "milestones": [24, 34],
         "scheduler_gamma": 0.3,
     },
 ]
@@ -95,20 +75,17 @@ def bool_arg(value):
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
-            "Run the recommended three-stage POMO post-training schedule. "
-            "Stage 2 and Stage 3 refresh the frozen reference from the previous stage "
-            "instead of resuming the same optimizer state."
+            "Run Stage 2 and Stage 3 post-training after the 3000-epoch POMO "
+            "checkpoint, which is treated as the completed Stage 1 model."
         )
     )
     parser.add_argument("--base_checkpoint", default=DEFAULT_BASE_CHECKPOINT)
     parser.add_argument("--result_root", default=None,
-                        help="Directory that will contain stage1/stage2/stage3 subdirectories.")
-    parser.add_argument("--start_stage", type=int, default=1, choices=[1, 2, 3])
-    parser.add_argument("--stop_stage", type=int, default=3, choices=[1, 2, 3])
-    parser.add_argument("--stage1_checkpoint", default=None,
-                        help="Existing Stage 1 checkpoint, required when starting from Stage 2 without result_root/stage1 output.")
+                        help="Directory that will contain stage2/stage3 subdirectories.")
+    parser.add_argument("--start_stage", type=int, default=2, choices=[2, 3])
+    parser.add_argument("--stop_stage", type=int, default=3, choices=[2, 3])
     parser.add_argument("--stage2_checkpoint", default=None,
-                        help="Existing Stage 2 checkpoint, required when starting from Stage 3 without result_root/stage2 output.")
+                        help="Existing Stage 2 checkpoint, required when starting directly from Stage 3.")
     parser.add_argument("--train_episodes", type=int, default=None,
                         help="Override train episodes per epoch for every stage.")
     parser.add_argument("--min_train_batch_size", type=int, default=1)
@@ -128,8 +105,15 @@ def resolve_result_root(args):
         return os.path.abspath(args.result_root)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return os.path.abspath(
-        os.path.join(SCRIPT_DIR, "result", f"{timestamp}_post_train_multistage")
+        os.path.join(SCRIPT_DIR, "result", f"{timestamp}_post_train_stage2_stage3")
     )
+
+
+def get_stage_config(stage_idx):
+    for stage_config in STAGE_CONFIGS:
+        if stage_config["idx"] == stage_idx:
+            return stage_config
+    raise ValueError("Unsupported post-training stage: {}".format(stage_idx))
 
 
 def stage_result_dir(result_root, stage_config):
@@ -151,7 +135,7 @@ def existing_stage_checkpoint(args, result_root, stage_idx):
     if override:
         return os.path.abspath(override)
 
-    stage_config = STAGE_CONFIGS[stage_idx - 1]
+    stage_config = get_stage_config(stage_idx)
     checkpoint_path = stage_final_checkpoint(result_root, stage_config)
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(
@@ -254,9 +238,9 @@ def main():
         os.makedirs(result_root, exist_ok=True)
 
     completed_checkpoints = {
-        0: os.path.abspath(args.base_checkpoint),
+        1: os.path.abspath(args.base_checkpoint),
     }
-    for stage_idx in range(1, args.start_stage):
+    for stage_idx in range(2, args.start_stage):
         completed_checkpoints[stage_idx] = existing_stage_checkpoint(args, result_root, stage_idx)
 
     print("result_root: {}".format(result_root), flush=True)
