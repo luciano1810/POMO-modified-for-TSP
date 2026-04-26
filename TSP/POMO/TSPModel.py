@@ -1,4 +1,6 @@
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -104,10 +106,16 @@ class TSPModel(nn.Module):
 
         if state.current_node is None:
             if selected_override is None:
-                selected = torch.arange(pomo_size)[None, :].expand(batch_size, pomo_size)
+                selected = torch.arange(
+                    pomo_size,
+                    device=state.BATCH_IDX.device,
+                )[None, :].expand(batch_size, pomo_size)
             else:
                 selected = selected_override
-            prob = torch.ones(size=(batch_size, pomo_size))
+            prob = torch.ones(
+                size=(batch_size, pomo_size),
+                device=state.BATCH_IDX.device,
+            )
 
             encoded_first_node = _get_encoding(self.encoded_nodes, selected)
             # shape: (batch, pomo, embedding)
@@ -433,7 +441,7 @@ def multi_head_attention(q, k, v, rank2_ninf_mask=None, rank3_ninf_mask=None):
     score = torch.matmul(q, k.transpose(2, 3))
     # shape: (batch, head_num, n, problem)
 
-    score_scaled = score / torch.sqrt(torch.tensor(key_dim, dtype=torch.float))
+    score_scaled = score / math.sqrt(key_dim)
     if rank2_ninf_mask is not None:
         score_scaled = score_scaled + rank2_ninf_mask[:, None, None, :].expand(batch_s, head_num, n, input_s)
     if rank3_ninf_mask is not None:

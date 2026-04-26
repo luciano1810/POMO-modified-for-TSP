@@ -630,7 +630,7 @@ class TSPPreferenceTrainer:
         return score_AM.avg, loss_AM.avg, pref_loss_AM.avg, rl_loss_AM.avg
 
     def _rollout(self, model, env, collect_prob, no_grad=False, forced_actions=None):
-        context = torch.no_grad() if no_grad else nullcontext()
+        context = torch.inference_mode() if no_grad else nullcontext()
         with context:
             reset_state, _, _ = env.reset()
             model.pre_forward(reset_state)
@@ -689,58 +689,66 @@ class TSPPreferenceTrainer:
         log_prob = prob_list.clamp_min(1e-12).log().sum(dim=2)
         return reward, log_prob, selected_actions
 
-    def _two_opt_tour(self, tour, dist_matrix, max_iterations):
-        tour = list(tour)
-        node_count = len(tour)
-        if node_count < 4 or max_iterations <= 0:
-            return tour
-
-        iteration = 0
-        improved = True
-        while improved and iteration < max_iterations:
-            improved = False
-            iteration += 1
-
-            for left_idx in range(1, node_count - 1):
-                for right_idx in range(left_idx + 1, node_count):
-                    prev_left = tour[left_idx - 1]
-                    left = tour[left_idx]
-                    right = tour[right_idx]
-                    next_right = tour[(right_idx + 1) % node_count]
-
-                    delta = (
-                        dist_matrix[prev_left, right] +
-                        dist_matrix[left, next_right] -
-                        dist_matrix[prev_left, left] -
-                        dist_matrix[right, next_right]
-                    )
-                    if float(delta) < -1e-9:
-                        tour[left_idx:right_idx + 1] = reversed(tour[left_idx:right_idx + 1])
-                        improved = True
-                        break
-                if improved:
-                    break
-
-        return tour
-
     def _build_2opt_teacher_actions(self, problems, source_actions):
         max_iterations = int(self.trainer_params['two_opt_teacher_max_iterations'])
-        problems_cpu = problems.detach().cpu()
-        source_actions_cpu = source_actions.detach().cpu()
+        teacher_actions = source_actions.detach().clone()
+        batch_size, problem_size = teacher_actions.size()
+        if problem_size < 4 or max_iterations <= 0:
+            return teacher_actions[:, None, :]
 
-        teacher_actions = []
-        for batch_idx in range(problems_cpu.size(0)):
-            coords = problems_cpu[batch_idx]
-            dist_matrix = torch.cdist(coords, coords, p=2)
-            source_tour = source_actions_cpu[batch_idx].tolist()
-            teacher_tour = self._two_opt_tour(
-                source_tour,
-                dist_matrix,
-                max_iterations=max_iterations,
-            )
-            teacher_actions.append(torch.tensor(teacher_tour, dtype=torch.long, device='cpu'))
+        device = teacher_actions.device
+        inf = torch.tensor(float('inf'), device=device)
+        position = torch.arange(problem_size, device=device)
+        valid_swap_mask = torch.triu(
+            torch.ones(
+                (problem_size, problem_size),
+                dtype=torch.bool,
+                device=device,
+            ),
+            diagonal=1,
+        )
+        valid_swap_mask[0, :] = False
+        valid_swap_mask[-1, :] = False
 
-        return torch.stack(teacher_actions, dim=0).to(self.device)[:, None, :]
+        with torch.inference_mode():
+            dist_matrix = torch.cdist(problems.detach(), problems.detach(), p=2)
+            batch_idx = torch.arange(batch_size, device=device)[:, None, None]
+
+            for _ in range(max_iterations):
+                prev_left = teacher_actions[:, (position - 1) % problem_size]
+                left = teacher_actions
+                right = teacher_actions
+                next_right = teacher_actions[:, (position + 1) % problem_size]
+
+                delta = (
+                    dist_matrix[batch_idx, prev_left[:, :, None], right[:, None, :]] +
+                    dist_matrix[batch_idx, left[:, :, None], next_right[:, None, :]] -
+                    dist_matrix[batch_idx, prev_left[:, :, None], left[:, :, None]] -
+                    dist_matrix[batch_idx, right[:, None, :], next_right[:, None, :]]
+                )
+                delta = delta.masked_fill(~valid_swap_mask[None, :, :], inf)
+                best_delta, flat_idx = delta.reshape(batch_size, -1).min(dim=1)
+                improved = best_delta < -1e-9
+                if not bool(improved.any()):
+                    break
+
+                left_idx = (flat_idx // problem_size)[:, None]
+                right_idx = (flat_idx % problem_size)[:, None]
+                position_2d = position[None, :].expand(batch_size, problem_size)
+                reversed_position = left_idx + right_idx - position_2d
+                reverse_mask = (
+                    improved[:, None] &
+                    (position_2d >= left_idx) &
+                    (position_2d <= right_idx)
+                )
+                gather_position = torch.where(
+                    reverse_mask,
+                    reversed_position,
+                    position_2d,
+                )
+                teacher_actions = teacher_actions.gather(dim=1, index=gather_position)
+
+        return teacher_actions.clone()[:, None, :]
 
     def _append_2opt_teacher_candidate(
         self,
