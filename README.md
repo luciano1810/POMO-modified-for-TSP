@@ -25,10 +25,12 @@ POMO/
 │   │   └── val/                  # public validation set, NOT the final hidden test set
 │   └── POMO/
 │       ├── train.py             # training entrypoint
+│       ├── train_stage1_accelerated.py  # faster-converging stage1 training entrypoint
 │       ├── post_train_preference.py  # preference-optimization post-training
 │       ├── test.py              # standardized evaluation entrypoint
 │       ├── test_eas.py          # optional EAS evaluation entrypoint
 │       ├── TSPTrainer.py
+│       ├── TSPAcceleratedTrainer.py
 │       ├── TSPPreferenceTrainer.py
 │       ├── TSPTester_LIB.py
 │       ├── TSPTester_EAS.py
@@ -142,6 +144,32 @@ python train.py
 - 训练曲线图
 - 源码快照
 
+### 2.1 推荐：更快收敛的第一阶段训练
+
+如果你不想继续沿用原版 `3100` epoch POMO，可以直接使用新的 stage1 accelerated trainer：
+
+```bash
+cd TSP/POMO
+python train_stage1_accelerated.py \
+  --problem_size 100 \
+  --epochs 1200 \
+  --train_batch_size 64 \
+  --scst_loss_weight 1.0 \
+  --elite_loss_weight 0.25 \
+  --elite_topk 8 \
+  --teacher_loss_weight 0.5 \
+  --teacher_use_2opt true \
+  --two_opt_teacher_max_iterations 8
+```
+
+这套第一阶段训练在原始 POMO 多起点 rollout 上额外加入了三种信号：
+
+- `greedy baseline` 的 self-critical policy gradient，用当前模型的 argmax rollout 降低方差
+- `elite top-k` self-imitation，把同一实例里最短的 sampled tours 重新加权利用起来
+- `best-of(sampled, greedy) + optional 2-opt` teacher distillation，把更强的局部搜索路径直接蒸馏回策略
+
+设计目标是用更少 epoch 训出比原版 POMO 更强的 base checkpoint。训练完成后，直接用标准 `test.py` 或 `test_eas.py` 在公开验证集上测 `avg_aug_gap` 即可。
+
 ### 3. 用你自己的 checkpoint 在公开验证集上验证
 
 ```bash
@@ -234,11 +262,11 @@ python post_train_preference.py \
 
 ### 4.1 推荐：在 3000epoch POMO 后继续跑第二、第三阶段 post-training
 
-`checkpoint-3000.pt` 已经是第一阶段：原版 POMO 在 `TSP100` 上训练 3000 epoch 后得到的 base checkpoint。后面要提升 `avg_aug_gap`，应该在它之后继续做第二、第三阶段 post-training，而不是把它当作还没训练过的初始模型。
+`checkpoint-3000.pt` 是仓库自带的第一阶段 baseline：原版 POMO 在 `TSP100` 上训练 3000 epoch 后得到的 base checkpoint。后面要提升 `avg_aug_gap`，应该在它之后继续做第二、第三阶段 post-training，而不是把它当作还没训练过的初始模型。如果你自己重跑第一阶段，也可以改用上面的 accelerated trainer，再把新 base checkpoint 接到后续 post-training。
 
 建议不要用 `--resume_checkpoint` 来启动新阶段。`resume` 是给中断恢复用的，会沿用上一轮 optimizer/scheduler 和旧 reference；第二、第三阶段更适合启动新的 post-training run：
 
-- 第 1 阶段：原版 POMO base training，产物是 `checkpoint-3000.pt`。
+- 第 1 阶段：原版 POMO base training，或新的 accelerated stage1 training，产物是 `TSP100` base checkpoint。
 - 第 2 阶段：从 `checkpoint-3000.pt` 出发，跑 `150/200/300` preference curriculum。
 - 第 3 阶段：用第 2 阶段最佳 checkpoint 同时作为 `init_checkpoint` 和新的 frozen reference，降低学习率，并加入 `500` 规模提升大规模泛化。
 
