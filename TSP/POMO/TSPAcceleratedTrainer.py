@@ -41,7 +41,6 @@ class TSPAcceleratedTrainer:
         self.device = device
 
         self.model = Model(**self.model_params).to(self.device)
-        self.env = Env(**self.env_params)
         self.optimizer = Optimizer(self.model.parameters(), **self.optimizer_params['optimizer'])
         self.scheduler = Scheduler(self.optimizer, **self.optimizer_params['scheduler'])
 
@@ -67,6 +66,18 @@ class TSPAcceleratedTrainer:
                 self.trainer_params['teacher_use_2opt'],
                 self.trainer_params['two_opt_teacher_max_iterations'],
                 self.trainer_params['max_grad_norm'],
+            )
+        )
+        curriculum = self.trainer_params['curriculum']
+        self.logger.info(
+            'Curriculum: problem_sizes={}, stage_epochs={}, mix_weights=(current={}, previous={}, base={}), '
+            'base_replay_problem_size={}.'.format(
+                curriculum['problem_sizes'],
+                curriculum.get('stage_epochs'),
+                curriculum['current_stage_mix_weight'],
+                curriculum['previous_stage_mix_weight'],
+                curriculum['base_replay_mix_weight'],
+                curriculum['base_replay_problem_size'],
             )
         )
 
@@ -102,11 +113,196 @@ class TSPAcceleratedTrainer:
                 if torch.is_tensor(value):
                     state[key] = value.to(self.device)
 
+    def _get_curriculum_stage_info(self, epoch):
+        curriculum = self.trainer_params['curriculum']
+        problem_sizes = curriculum['problem_sizes']
+        if not problem_sizes:
+            raise ValueError('curriculum.problem_sizes must not be empty.')
+
+        stage_epochs = curriculum.get('stage_epochs')
+        if stage_epochs is None:
+            stage_length = max(1, math.ceil(self.trainer_params['epochs'] / len(problem_sizes)))
+            stage_idx = min((epoch - 1) // stage_length, len(problem_sizes) - 1)
+            stage_start = stage_idx * stage_length + 1
+            stage_end = min(self.trainer_params['epochs'], (stage_idx + 1) * stage_length)
+        else:
+            if len(stage_epochs) != len(problem_sizes):
+                raise ValueError(
+                    'curriculum.stage_epochs must have the same length as curriculum.problem_sizes.'
+                )
+            if sum(stage_epochs) != self.trainer_params['epochs']:
+                raise ValueError(
+                    'Sum of curriculum.stage_epochs must equal trainer_params["epochs"].'
+                )
+
+            running_epoch = 0
+            stage_idx = None
+            stage_start = None
+            stage_end = None
+            for candidate_stage_idx, stage_length in enumerate(stage_epochs):
+                if stage_length <= 0:
+                    raise ValueError('curriculum.stage_epochs must contain only positive integers.')
+                candidate_stage_start = running_epoch + 1
+                running_epoch += stage_length
+                candidate_stage_end = running_epoch
+                if epoch <= candidate_stage_end:
+                    stage_idx = candidate_stage_idx
+                    stage_start = candidate_stage_start
+                    stage_end = candidate_stage_end
+                    break
+
+            if stage_idx is None:
+                raise ValueError(
+                    'Epoch {} exceeded configured curriculum stage epochs.'.format(epoch)
+                )
+
+        problem_mix_entries = self._build_stage_problem_mix_entries(stage_idx, problem_sizes)
+        return {
+            'stage_idx': stage_idx,
+            'problem_size': problem_sizes[stage_idx],
+            'stage_start': stage_start,
+            'stage_end': stage_end,
+            'problem_mix_entries': problem_mix_entries,
+        }
+
+    def _build_stage_problem_mix_entries(self, stage_idx, problem_sizes):
+        curriculum = self.trainer_params['curriculum']
+        raw_entries = [
+            (problem_sizes[stage_idx], curriculum['current_stage_mix_weight']),
+            (curriculum['base_replay_problem_size'], curriculum['base_replay_mix_weight']),
+        ]
+        if stage_idx > 0:
+            raw_entries.append((problem_sizes[stage_idx - 1], curriculum['previous_stage_mix_weight']))
+
+        combined_weights = {}
+        order = []
+        for problem_size, weight in raw_entries:
+            if weight <= 0:
+                continue
+            if problem_size not in combined_weights:
+                combined_weights[problem_size] = 0.0
+                order.append(problem_size)
+            combined_weights[problem_size] += weight
+
+        total_weight = sum(combined_weights.values())
+        if total_weight <= 0:
+            raise ValueError('Curriculum replay weights must sum to a positive value.')
+
+        return [
+            (problem_size, combined_weights[problem_size] / total_weight)
+            for problem_size in order
+        ]
+
+    @staticmethod
+    def _format_problem_mix_entries(problem_mix_entries):
+        return ', '.join(
+            '{}:{:.1f}%'.format(problem_size, mix_weight * 100.0)
+            for problem_size, mix_weight in problem_mix_entries
+        )
+
+    @staticmethod
+    def _allocate_episode_targets(train_num_episode, problem_mix_entries):
+        raw_targets = {
+            problem_size: train_num_episode * mix_weight
+            for problem_size, mix_weight in problem_mix_entries
+        }
+        episode_targets = {
+            problem_size: int(math.floor(raw_target))
+            for problem_size, raw_target in raw_targets.items()
+        }
+
+        remaining = train_num_episode - sum(episode_targets.values())
+        if remaining > 0:
+            ordered_problem_sizes = sorted(
+                raw_targets.keys(),
+                key=lambda problem_size: (
+                    raw_targets[problem_size] - episode_targets[problem_size],
+                    raw_targets[problem_size],
+                ),
+                reverse=True,
+            )
+            for idx in range(remaining):
+                episode_targets[ordered_problem_sizes[idx % len(ordered_problem_sizes)]] += 1
+
+        return episode_targets
+
+    @staticmethod
+    def _select_next_problem_size(episode_targets, episode_done_by_size):
+        active_problem_sizes = [
+            problem_size for problem_size, target in episode_targets.items()
+            if episode_done_by_size[problem_size] < target
+        ]
+        if not active_problem_sizes:
+            raise RuntimeError('No active problem sizes remain for the current epoch.')
+
+        return max(
+            active_problem_sizes,
+            key=lambda problem_size: (
+                (episode_targets[problem_size] - episode_done_by_size[problem_size]) / max(1, episode_targets[problem_size]),
+                episode_targets[problem_size] - episode_done_by_size[problem_size],
+            ),
+        )
+
+    def _get_train_batch_size(self, problem_size):
+        batch_schedule = self.trainer_params.get('train_batch_size_by_problem_size')
+        if batch_schedule is not None and problem_size in batch_schedule:
+            return batch_schedule[problem_size]
+        return self.trainer_params['train_batch_size']
+
+    def _handle_oom(self, problem_size, attempted_batch_size, error):
+        if 'out of memory' not in str(error).lower():
+            raise error
+
+        reduced_batch_size = attempted_batch_size // 2
+        if reduced_batch_size < self.trainer_params['min_train_batch_size']:
+            raise error
+
+        self.logger.warning(
+            'CUDA OOM at problem_size={}, batch_size={}. Reducing batch size to {} and retrying.'.format(
+                problem_size,
+                attempted_batch_size,
+                reduced_batch_size,
+            )
+        )
+
+        self.optimizer.zero_grad(set_to_none=True)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        self.trainer_params['train_batch_size_by_problem_size'][problem_size] = reduced_batch_size
+        return reduced_batch_size
+
+    def _build_env(self, problem_size):
+        pomo_size_override = self.trainer_params.get('pomo_size_override')
+        pomo_size = problem_size if pomo_size_override is None else pomo_size_override
+        if pomo_size > problem_size:
+            raise ValueError(
+                'Configured pomo_size {} exceeds current problem_size {}.'.format(
+                    pomo_size,
+                    problem_size,
+                )
+            )
+        return Env(problem_size=problem_size, pomo_size=pomo_size)
+
     def run(self):
         self.time_estimator.reset(self.start_epoch)
         for epoch in range(self.start_epoch, self.trainer_params['epochs'] + 1):
             self.logger.info('=================================================================')
             self.scheduler.step()
+
+            stage_info = self._get_curriculum_stage_info(epoch)
+            problem_size = stage_info['problem_size']
+            self.logger.info(
+                'Epoch {:3d}: curriculum stage {}/{} -> problem_size={} (epochs {}-{}), mix=[{}]'.format(
+                    epoch,
+                    stage_info['stage_idx'] + 1,
+                    len(self.trainer_params['curriculum']['problem_sizes']),
+                    problem_size,
+                    stage_info['stage_start'],
+                    stage_info['stage_end'],
+                    self._format_problem_mix_entries(stage_info['problem_mix_entries']),
+                )
+            )
 
             (
                 train_score,
@@ -116,7 +312,7 @@ class TSPAcceleratedTrainer:
                 train_scst_loss,
                 train_elite_loss,
                 train_teacher_loss,
-            ) = self._train_one_epoch(epoch)
+            ) = self._train_one_epoch(epoch, stage_info)
 
             self.result_log.append('train_score', epoch, train_score)
             self.result_log.append('train_greedy_score', epoch, train_greedy_score)
@@ -125,6 +321,7 @@ class TSPAcceleratedTrainer:
             self.result_log.append('train_scst_loss', epoch, train_scst_loss)
             self.result_log.append('train_elite_loss', epoch, train_elite_loss)
             self.result_log.append('train_teacher_loss', epoch, train_teacher_loss)
+            self.result_log.append('train_problem_size', epoch, problem_size)
 
             elapsed_time_str, remain_time_str = self.time_estimator.get_est_string(
                 epoch,
@@ -177,6 +374,16 @@ class TSPAcceleratedTrainer:
                     'trainer_params': {
                         'problem_size': self.env_params['problem_size'],
                         'pomo_size': self.env_params['pomo_size'],
+                        'curriculum_problem_sizes': self.trainer_params['curriculum']['problem_sizes'],
+                        'curriculum_stage_epochs': self.trainer_params['curriculum'].get('stage_epochs'),
+                        'base_replay_problem_size': self.trainer_params['curriculum']['base_replay_problem_size'],
+                        'curriculum_mix_weights': {
+                            'current_stage': self.trainer_params['curriculum']['current_stage_mix_weight'],
+                            'previous_stage': self.trainer_params['curriculum']['previous_stage_mix_weight'],
+                            'base_replay': self.trainer_params['curriculum']['base_replay_mix_weight'],
+                        },
+                        'train_batch_size_by_problem_size': self.trainer_params.get('train_batch_size_by_problem_size'),
+                        'min_train_batch_size': self.trainer_params['min_train_batch_size'],
                         'scst_loss_weight': self.trainer_params['scst_loss_weight'],
                         'elite_loss_weight': self.trainer_params['elite_loss_weight'],
                         'elite_topk': self.trainer_params['elite_topk'],
@@ -213,7 +420,7 @@ class TSPAcceleratedTrainer:
                 self.logger.info('Now, printing log array...')
                 util_print_log_array(self.logger, self.result_log)
 
-    def _train_one_epoch(self, epoch):
+    def _train_one_epoch(self, epoch, stage_info):
         score_AM = AverageMeter()
         greedy_score_AM = AverageMeter()
         teacher_score_AM = AverageMeter()
@@ -223,41 +430,56 @@ class TSPAcceleratedTrainer:
         teacher_loss_AM = AverageMeter()
 
         train_num_episode = self.trainer_params['train_episodes']
+        episode_targets = self._allocate_episode_targets(train_num_episode, stage_info['problem_mix_entries'])
+        episode_done_by_size = {
+            problem_size: 0 for problem_size in episode_targets.keys()
+        }
         episode = 0
         loop_cnt = 0
         while episode < train_num_episode:
-            remaining = train_num_episode - episode
-            batch_size = min(self.trainer_params['train_batch_size'], remaining)
+            problem_size = self._select_next_problem_size(episode_targets, episode_done_by_size)
+            remaining_for_problem_size = episode_targets[problem_size] - episode_done_by_size[problem_size]
+            batch_size = self._get_train_batch_size(problem_size)
+            current_batch_size = min(batch_size, remaining_for_problem_size)
 
-            (
-                avg_score,
-                avg_greedy_score,
-                avg_teacher_score,
-                avg_loss,
-                avg_scst_loss,
-                avg_elite_loss,
-                avg_teacher_loss,
-            ) = self._train_one_batch(batch_size)
+            try:
+                (
+                    avg_score,
+                    avg_greedy_score,
+                    avg_teacher_score,
+                    avg_loss,
+                    avg_scst_loss,
+                    avg_elite_loss,
+                    avg_teacher_loss,
+                ) = self._train_one_batch(
+                    batch_size=current_batch_size,
+                    problem_size=problem_size,
+                )
+            except RuntimeError as error:
+                current_batch_size = self._handle_oom(problem_size, current_batch_size, error)
+                continue
 
-            score_AM.update(avg_score, batch_size)
-            greedy_score_AM.update(avg_greedy_score, batch_size)
-            teacher_score_AM.update(avg_teacher_score, batch_size)
-            loss_AM.update(avg_loss, batch_size)
-            scst_loss_AM.update(avg_scst_loss, batch_size)
-            elite_loss_AM.update(avg_elite_loss, batch_size)
-            teacher_loss_AM.update(avg_teacher_loss, batch_size)
-            episode += batch_size
+            score_AM.update(avg_score, current_batch_size)
+            greedy_score_AM.update(avg_greedy_score, current_batch_size)
+            teacher_score_AM.update(avg_teacher_score, current_batch_size)
+            loss_AM.update(avg_loss, current_batch_size)
+            scst_loss_AM.update(avg_scst_loss, current_batch_size)
+            elite_loss_AM.update(avg_elite_loss, current_batch_size)
+            teacher_loss_AM.update(avg_teacher_loss, current_batch_size)
+            episode_done_by_size[problem_size] += current_batch_size
+            episode += current_batch_size
 
             if epoch == self.start_epoch:
                 loop_cnt += 1
                 if loop_cnt <= 10:
                     self.logger.info(
-                        'Epoch {:3d}: Train {:3d}/{:3d}({:1.1f}%) Score: {:.4f}, Greedy: {:.4f}, '
+                        'Epoch {:3d}: Train {:3d}/{:3d}({:1.1f}%) size={} Score: {:.4f}, Greedy: {:.4f}, '
                         'Teacher: {:.4f}, Loss: {:.4f}, SCST: {:.4f}, Elite: {:.4f}, Tchr: {:.4f}'.format(
                             epoch,
                             episode,
                             train_num_episode,
                             100. * episode / train_num_episode,
+                            problem_size,
                             score_AM.avg,
                             greedy_score_AM.avg,
                             teacher_score_AM.avg,
@@ -268,9 +490,17 @@ class TSPAcceleratedTrainer:
                         )
                     )
 
+        replay_summary = ', '.join(
+            '{}:{}/{}'.format(
+                problem_size,
+                episode_done_by_size[problem_size],
+                episode_targets[problem_size],
+            )
+            for problem_size, _ in stage_info['problem_mix_entries']
+        )
         self.logger.info(
             'Epoch {:3d}: Train ({:3.0f}%) Score: {:.4f}, Greedy: {:.4f}, Teacher: {:.4f}, '
-            'Loss: {:.4f}, SCST: {:.4f}, Elite: {:.4f}, Tchr: {:.4f}'.format(
+            'Loss: {:.4f}, SCST: {:.4f}, Elite: {:.4f}, Tchr: {:.4f}, Replay[{}]'.format(
                 epoch,
                 100. * episode / train_num_episode,
                 score_AM.avg,
@@ -280,6 +510,7 @@ class TSPAcceleratedTrainer:
                 scst_loss_AM.avg,
                 elite_loss_AM.avg,
                 teacher_loss_AM.avg,
+                replay_summary,
             )
         )
 
@@ -293,11 +524,11 @@ class TSPAcceleratedTrainer:
             teacher_loss_AM.avg,
         )
 
-    def _prepare_train_batch(self, batch_size):
-        self.env.load_problems(batch_size)
-        self.env.problems = self.env.problems.to(self.device)
-        self.env.BATCH_IDX = self.env.BATCH_IDX.to(self.device)
-        self.env.POMO_IDX = self.env.POMO_IDX.to(self.device)
+    def _prepare_train_batch(self, env, batch_size):
+        env.load_problems(batch_size)
+        env.problems = env.problems.to(self.device)
+        env.BATCH_IDX = env.BATCH_IDX.to(self.device)
+        env.POMO_IDX = env.POMO_IDX.to(self.device)
 
     def _build_env_from_problems(self, problems, pomo_size):
         env = Env(problem_size=problems.size(1), pomo_size=pomo_size)
@@ -503,12 +734,13 @@ class TSPAcceleratedTrainer:
         teacher_score = -teacher_reward.float().mean()
         return teacher_loss, teacher_score
 
-    def _train_one_batch(self, batch_size):
+    def _train_one_batch(self, batch_size, problem_size):
         self.global_batch_step += 1
-        self._prepare_train_batch(batch_size)
+        env = self._build_env(problem_size)
+        self._prepare_train_batch(env, batch_size)
 
         sampled_reward, sampled_prob_list, sampled_actions = self._rollout(
-            self.env,
+            env,
             collect_prob=True,
             no_grad=False,
             eval_type='softmax',
@@ -516,7 +748,7 @@ class TSPAcceleratedTrainer:
         sampled_log_prob = sampled_prob_list.clamp_min(1e-12).log().sum(dim=2)
 
         greedy_reward, _, greedy_actions = self._rollout(
-            self.env,
+            env,
             collect_prob=False,
             no_grad=True,
             eval_type='argmax',
@@ -544,14 +776,14 @@ class TSPAcceleratedTrainer:
         ).float().mean()
         if self.trainer_params['teacher_loss_weight'] > 0:
             teacher_actions, teacher_source_reward = self._build_teacher_actions(
-                problems=self.env.problems,
+                problems=env.problems,
                 sampled_reward=sampled_reward,
                 sampled_actions=sampled_actions,
                 greedy_reward=greedy_reward,
                 greedy_actions=greedy_actions,
             )
             teacher_loss, teacher_score = self._compute_teacher_loss(
-                problems=self.env.problems,
+                problems=env.problems,
                 teacher_actions=teacher_actions,
                 teacher_source_reward=teacher_source_reward,
             )

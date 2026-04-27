@@ -151,9 +151,14 @@ python train.py
 ```bash
 cd TSP/POMO
 python train_stage1_accelerated.py \
-  --problem_size 100 \
+  --curriculum_problem_sizes 100 150 200 250 300 \
   --epochs 1200 \
-  --train_batch_size 64 \
+  --curriculum_stage_epochs 200 220 260 280 240 \
+  --base_replay_problem_size 100 \
+  --current_stage_mix_weight 0.75 \
+  --previous_stage_mix_weight 0.20 \
+  --base_replay_mix_weight 0.05 \
+  --batch_schedule 100:64,150:48,200:32,250:24,300:20 \
   --scst_loss_weight 1.0 \
   --elite_loss_weight 0.25 \
   --elite_topk 8 \
@@ -167,6 +172,8 @@ python train_stage1_accelerated.py \
 - `greedy baseline` 的 self-critical policy gradient，用当前模型的 argmax rollout 降低方差
 - `elite top-k` self-imitation，把同一实例里最短的 sampled tours 重新加权利用起来
 - `best-of(sampled, greedy) + optional 2-opt` teacher distillation，把更强的局部搜索路径直接蒸馏回策略
+
+同时也支持和 post-training 一样的 curriculum + mixed replay：当前阶段主训、上一阶段回放、基础规模回放。这样第一阶段就不再只盯着 `TSP100`，而是可以直接做 `100 -> 150 -> 200 -> 250 -> 300` 的渐进训练。
 
 设计目标是用更少 epoch 训出比原版 POMO 更强的 base checkpoint。训练完成后，直接用标准 `test.py` 或 `test_eas.py` 在公开验证集上测 `avg_aug_gap` 即可。
 

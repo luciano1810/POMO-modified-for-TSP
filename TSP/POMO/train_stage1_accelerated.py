@@ -36,6 +36,12 @@ DEFAULT_STAGE_NAME = 'stage1_accelerated'
 DEFAULT_EPOCHS = 1200
 DEFAULT_TRAIN_EPISODES = 100 * 1000
 DEFAULT_TRAIN_BATCH_SIZE = 64
+DEFAULT_MIN_TRAIN_BATCH_SIZE = 1
+DEFAULT_BATCH_SCHEDULE = '100:64,150:48,200:32,250:24,300:20,500:12'
+DEFAULT_BASE_REPLAY_PROBLEM_SIZE = 100
+DEFAULT_CURRENT_STAGE_MIX_WEIGHT = 0.75
+DEFAULT_PREVIOUS_STAGE_MIX_WEIGHT = 0.20
+DEFAULT_BASE_REPLAY_MIX_WEIGHT = 0.05
 DEFAULT_LR = 1e-4
 DEFAULT_WEIGHT_DECAY = 1e-6
 DEFAULT_MILESTONES = [800, 1000]
@@ -64,6 +70,56 @@ def str2bool(value):
     raise argparse.ArgumentTypeError(f'Invalid boolean value: {value}')
 
 
+def parse_batch_schedule(schedule_text):
+    schedule = {}
+    if schedule_text is None:
+        return schedule
+
+    for item in schedule_text.split(','):
+        item = item.strip()
+        if not item:
+            continue
+        problem_size_text, batch_size_text = item.split(':')
+        schedule[int(problem_size_text)] = int(batch_size_text)
+    return schedule
+
+
+def resolve_curriculum_problem_sizes(args):
+    if args.curriculum_problem_sizes is not None:
+        return list(args.curriculum_problem_sizes)
+    return [args.problem_size]
+
+
+def resolve_curriculum_stage_epochs(args, curriculum_problem_sizes):
+    if args.curriculum_stage_epochs is not None:
+        stage_epochs = list(args.curriculum_stage_epochs)
+        if len(stage_epochs) != len(curriculum_problem_sizes):
+            raise ValueError(
+                '--curriculum_stage_epochs must have the same length as --curriculum_problem_sizes.'
+            )
+        if any(stage_epoch <= 0 for stage_epoch in stage_epochs):
+            raise ValueError('--curriculum_stage_epochs must contain only positive integers.')
+        if sum(stage_epochs) != args.epochs:
+            raise ValueError(
+                '--epochs ({}) must match the sum of --curriculum_stage_epochs ({}).'.format(
+                    args.epochs,
+                    sum(stage_epochs),
+                )
+            )
+        return stage_epochs
+
+    if len(curriculum_problem_sizes) == 1:
+        return [args.epochs]
+
+    stage_count = len(curriculum_problem_sizes)
+    base_stage_epoch = args.epochs // stage_count
+    remainder = args.epochs % stage_count
+    return [
+        base_stage_epoch + (1 if stage_idx < remainder else 0)
+        for stage_idx in range(stage_count)
+    ]
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
@@ -72,9 +128,9 @@ def build_parser():
         )
     )
     parser.add_argument('--problem_size', type=int, default=DEFAULT_PROBLEM_SIZE,
-                        help='Problem size for stage1 random TSP training.')
+                        help='Fallback single problem size when --curriculum_problem_sizes is not provided.')
     parser.add_argument('--pomo_size', type=int, default=DEFAULT_POMO_SIZE,
-                        help='POMO rollout width. Defaults to problem_size.')
+                        help='Optional fixed POMO rollout width. Defaults to current problem_size.')
     parser.add_argument('--stage_name', default=DEFAULT_STAGE_NAME,
                         help='Short name included in result folder metadata.')
     parser.add_argument('--result_dir', default=None,
@@ -84,7 +140,23 @@ def build_parser():
     parser.add_argument('--train_episodes', type=int, default=DEFAULT_TRAIN_EPISODES,
                         help='Number of training episodes per epoch.')
     parser.add_argument('--train_batch_size', type=int, default=DEFAULT_TRAIN_BATCH_SIZE,
-                        help='Training batch size.')
+                        help='Fallback training batch size when a problem size is not in --batch_schedule.')
+    parser.add_argument('--min_train_batch_size', type=int, default=DEFAULT_MIN_TRAIN_BATCH_SIZE,
+                        help='Minimum batch size allowed when auto-reducing after CUDA OOM.')
+    parser.add_argument('--batch_schedule', default=DEFAULT_BATCH_SCHEDULE,
+                        help="Per-size batch schedule formatted as '100:64,150:48,200:32,...'.")
+    parser.add_argument('--curriculum_problem_sizes', type=int, nargs='+', default=None,
+                        help='Optional curriculum problem sizes used by stage1 training.')
+    parser.add_argument('--curriculum_stage_epochs', type=int, nargs='+', default=None,
+                        help='Optional per-stage epoch counts aligned with --curriculum_problem_sizes.')
+    parser.add_argument('--base_replay_problem_size', type=int, default=DEFAULT_BASE_REPLAY_PROBLEM_SIZE,
+                        help='Base problem size kept as replay throughout accelerated stage1 training.')
+    parser.add_argument('--current_stage_mix_weight', type=float, default=DEFAULT_CURRENT_STAGE_MIX_WEIGHT,
+                        help='Replay weight for the current curriculum stage.')
+    parser.add_argument('--previous_stage_mix_weight', type=float, default=DEFAULT_PREVIOUS_STAGE_MIX_WEIGHT,
+                        help='Replay weight for the previous curriculum stage.')
+    parser.add_argument('--base_replay_mix_weight', type=float, default=DEFAULT_BASE_REPLAY_MIX_WEIGHT,
+                        help='Replay weight for the base problem size.')
     parser.add_argument('--lr', type=float, default=DEFAULT_LR,
                         help='Learning rate.')
     parser.add_argument('--weight_decay', type=float, default=DEFAULT_WEIGHT_DECAY,
@@ -124,10 +196,11 @@ def build_parser():
 ##########################################################################################
 # parameter builders
 
-def build_env_params(args):
-    pomo_size = args.problem_size if args.pomo_size is None else args.pomo_size
+def build_env_params(args, curriculum_problem_sizes):
+    base_problem_size = min([args.base_replay_problem_size] + curriculum_problem_sizes)
+    pomo_size = base_problem_size if args.pomo_size is None else args.pomo_size
     return {
-        'problem_size': args.problem_size,
+        'problem_size': base_problem_size,
         'pomo_size': pomo_size,
     }
 
@@ -158,7 +231,7 @@ def build_optimizer_params(args):
     }
 
 
-def build_trainer_params(args):
+def build_trainer_params(args, curriculum_problem_sizes, curriculum_stage_epochs):
     init_checkpoint = None if args.init_checkpoint is None else os.path.abspath(args.init_checkpoint)
     resume_checkpoint = None if args.resume_checkpoint is None else os.path.abspath(args.resume_checkpoint)
     return {
@@ -168,6 +241,9 @@ def build_trainer_params(args):
         'epochs': args.epochs,
         'train_episodes': args.train_episodes,
         'train_batch_size': args.train_batch_size,
+        'min_train_batch_size': args.min_train_batch_size,
+        'train_batch_size_by_problem_size': parse_batch_schedule(args.batch_schedule),
+        'pomo_size_override': args.pomo_size,
         'scst_loss_weight': args.scst_loss_weight,
         'elite_loss_weight': args.elite_loss_weight,
         'elite_topk': args.elite_topk,
@@ -175,6 +251,14 @@ def build_trainer_params(args):
         'teacher_use_2opt': args.teacher_use_2opt,
         'two_opt_teacher_max_iterations': args.two_opt_teacher_max_iterations,
         'max_grad_norm': args.max_grad_norm,
+        'curriculum': {
+            'problem_sizes': curriculum_problem_sizes,
+            'stage_epochs': curriculum_stage_epochs,
+            'base_replay_problem_size': args.base_replay_problem_size,
+            'current_stage_mix_weight': args.current_stage_mix_weight,
+            'previous_stage_mix_weight': args.previous_stage_mix_weight,
+            'base_replay_mix_weight': args.base_replay_mix_weight,
+        },
         'logging': {
             'model_save_interval': 100,
             'img_save_interval': 100,
@@ -198,9 +282,15 @@ def build_trainer_params(args):
     }
 
 
-def build_logger_params(args):
+def build_logger_params(args, curriculum_problem_sizes):
     stage_name = (args.stage_name or DEFAULT_STAGE_NAME).strip() or DEFAULT_STAGE_NAME
-    desc = 'train__tsp_n{}__{}'.format(args.problem_size, stage_name)
+    if len(curriculum_problem_sizes) == 1:
+        desc = 'train__tsp_n{}__{}'.format(curriculum_problem_sizes[0], stage_name)
+    else:
+        desc = 'train__{}_curriculum_{}'.format(
+            stage_name,
+            '_'.join(map(str, curriculum_problem_sizes)),
+        )
     log_file = {
         'desc': desc,
         'filename': 'log.txt',
@@ -234,15 +324,37 @@ def main():
         args.epochs = 2
         args.train_episodes = 64
         args.train_batch_size = 4
+        if args.curriculum_problem_sizes is not None:
+            args.curriculum_problem_sizes = args.curriculum_problem_sizes[:2]
+            if args.curriculum_stage_epochs is not None:
+                args.curriculum_stage_epochs = args.curriculum_stage_epochs[:len(args.curriculum_problem_sizes)]
+                args.epochs = sum(args.curriculum_stage_epochs)
+            else:
+                args.epochs = 4
 
-    env_params = build_env_params(args)
-    if env_params['pomo_size'] > env_params['problem_size']:
-        raise ValueError('--pomo_size must not exceed --problem_size.')
+    curriculum_problem_sizes = resolve_curriculum_problem_sizes(args)
+    curriculum_stage_epochs = resolve_curriculum_stage_epochs(args, curriculum_problem_sizes)
+    if any(problem_size <= 0 for problem_size in curriculum_problem_sizes):
+        raise ValueError('--curriculum_problem_sizes must contain only positive integers.')
+    if args.base_replay_problem_size <= 0:
+        raise ValueError('--base_replay_problem_size must be positive.')
+    if args.min_train_batch_size <= 0:
+        raise ValueError('--min_train_batch_size must be positive.')
+    if (
+        args.current_stage_mix_weight <= 0 and
+        args.previous_stage_mix_weight <= 0 and
+        args.base_replay_mix_weight <= 0
+    ):
+        raise ValueError('Curriculum replay weights must sum to a positive value.')
+
+    env_params = build_env_params(args, curriculum_problem_sizes)
+    if args.pomo_size is not None and args.pomo_size > min(curriculum_problem_sizes + [args.base_replay_problem_size]):
+        raise ValueError('--pomo_size must not exceed the smallest curriculum/base replay problem size.')
 
     model_params = build_model_params()
     optimizer_params = build_optimizer_params(args)
-    trainer_params = build_trainer_params(args)
-    logger_params = build_logger_params(args)
+    trainer_params = build_trainer_params(args, curriculum_problem_sizes, curriculum_stage_epochs)
+    logger_params = build_logger_params(args, curriculum_problem_sizes)
 
     create_logger(**logger_params)
     _print_config(args, env_params, model_params, optimizer_params, trainer_params)
