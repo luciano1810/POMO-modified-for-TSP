@@ -54,12 +54,19 @@ class TSPAcceleratedTrainer:
         )
         self.logger.info('Number of parameters: %.2fM' % (total_params / 1e6))
         self.logger.info(
-            'Loss weights: scst={}, elite={}, teacher={}.'.format(
+            'Loss weights: scst={}, elite={}, teacher_fallback={}.'.format(
                 self.trainer_params['scst_loss_weight'],
                 self.trainer_params['elite_loss_weight'],
                 self.trainer_params['teacher_loss_weight'],
             )
         )
+        teacher_schedule = self.trainer_params.get('teacher_loss_weight_stage_schedule')
+        if teacher_schedule:
+            self.logger.info(
+                'Teacher stage-relative loss schedule: {}.'.format(
+                    self._format_weight_schedule(teacher_schedule)
+                )
+            )
         self.logger.info(
             'Elite top-k={}, teacher_use_2opt={}, two_opt_max_iterations={}, grad_clip={}.'.format(
                 self.trainer_params['elite_topk'],
@@ -201,6 +208,26 @@ class TSPAcceleratedTrainer:
         )
 
     @staticmethod
+    def _format_weight_schedule(schedule):
+        return ','.join(
+            '{}:{:.4g}'.format(start_epoch, weight)
+            for start_epoch, weight in schedule
+        )
+
+    def _get_effective_teacher_loss_weight(self, epoch, stage_info):
+        schedule = self.trainer_params.get('teacher_loss_weight_stage_schedule')
+        if not schedule:
+            return self.trainer_params['teacher_loss_weight']
+
+        local_epoch = epoch - stage_info['stage_start'] + 1
+        effective_weight = schedule[0][1]
+        for start_epoch, weight in schedule:
+            if local_epoch < start_epoch:
+                break
+            effective_weight = weight
+        return effective_weight
+
+    @staticmethod
     def _allocate_episode_targets(train_num_episode, problem_mix_entries):
         raw_targets = {
             problem_size: train_num_episode * mix_weight
@@ -292,14 +319,17 @@ class TSPAcceleratedTrainer:
 
             stage_info = self._get_curriculum_stage_info(epoch)
             problem_size = stage_info['problem_size']
+            effective_teacher_loss_weight = self._get_effective_teacher_loss_weight(epoch, stage_info)
             self.logger.info(
-                'Epoch {:3d}: curriculum stage {}/{} -> problem_size={} (epochs {}-{}), mix=[{}]'.format(
+                'Epoch {:3d}: curriculum stage {}/{} -> problem_size={} (epochs {}-{}), '
+                'teacher_weight={:.4g}, mix=[{}]'.format(
                     epoch,
                     stage_info['stage_idx'] + 1,
                     len(self.trainer_params['curriculum']['problem_sizes']),
                     problem_size,
                     stage_info['stage_start'],
                     stage_info['stage_end'],
+                    effective_teacher_loss_weight,
                     self._format_problem_mix_entries(stage_info['problem_mix_entries']),
                 )
             )
@@ -312,7 +342,7 @@ class TSPAcceleratedTrainer:
                 train_scst_loss,
                 train_elite_loss,
                 train_teacher_loss,
-            ) = self._train_one_epoch(epoch, stage_info)
+            ) = self._train_one_epoch(epoch, stage_info, effective_teacher_loss_weight)
 
             self.result_log.append('train_score', epoch, train_score)
             self.result_log.append('train_greedy_score', epoch, train_greedy_score)
@@ -322,6 +352,7 @@ class TSPAcceleratedTrainer:
             self.result_log.append('train_elite_loss', epoch, train_elite_loss)
             self.result_log.append('train_teacher_loss', epoch, train_teacher_loss)
             self.result_log.append('train_problem_size', epoch, problem_size)
+            self.result_log.append('train_teacher_loss_weight', epoch, effective_teacher_loss_weight)
 
             elapsed_time_str, remain_time_str = self.time_estimator.get_est_string(
                 epoch,
@@ -388,6 +419,10 @@ class TSPAcceleratedTrainer:
                         'elite_loss_weight': self.trainer_params['elite_loss_weight'],
                         'elite_topk': self.trainer_params['elite_topk'],
                         'teacher_loss_weight': self.trainer_params['teacher_loss_weight'],
+                        'teacher_loss_weight_stage_schedule': self.trainer_params.get(
+                            'teacher_loss_weight_stage_schedule'
+                        ),
+                        'effective_teacher_loss_weight': effective_teacher_loss_weight,
                         'teacher_use_2opt': self.trainer_params['teacher_use_2opt'],
                         'two_opt_teacher_max_iterations': self.trainer_params['two_opt_teacher_max_iterations'],
                         'max_grad_norm': self.trainer_params['max_grad_norm'],
@@ -420,7 +455,7 @@ class TSPAcceleratedTrainer:
                 self.logger.info('Now, printing log array...')
                 util_print_log_array(self.logger, self.result_log)
 
-    def _train_one_epoch(self, epoch, stage_info):
+    def _train_one_epoch(self, epoch, stage_info, teacher_loss_weight):
         score_AM = AverageMeter()
         greedy_score_AM = AverageMeter()
         teacher_score_AM = AverageMeter()
@@ -454,6 +489,7 @@ class TSPAcceleratedTrainer:
                 ) = self._train_one_batch(
                     batch_size=current_batch_size,
                     problem_size=problem_size,
+                    teacher_loss_weight=teacher_loss_weight,
                 )
             except RuntimeError as error:
                 current_batch_size = self._handle_oom(problem_size, current_batch_size, error)
@@ -474,7 +510,8 @@ class TSPAcceleratedTrainer:
                 if loop_cnt <= 10:
                     self.logger.info(
                         'Epoch {:3d}: Train {:3d}/{:3d}({:1.1f}%) size={} Score: {:.4f}, Greedy: {:.4f}, '
-                        'Teacher: {:.4f}, Loss: {:.4f}, SCST: {:.4f}, Elite: {:.4f}, Tchr: {:.4f}'.format(
+                        'Teacher: {:.4f}, Loss: {:.4f}, SCST: {:.4f}, Elite: {:.4f}, '
+                        'Tchr: {:.4f}, TchrW: {:.4g}'.format(
                             epoch,
                             episode,
                             train_num_episode,
@@ -487,6 +524,7 @@ class TSPAcceleratedTrainer:
                             scst_loss_AM.avg,
                             elite_loss_AM.avg,
                             teacher_loss_AM.avg,
+                            teacher_loss_weight,
                         )
                     )
 
@@ -500,7 +538,7 @@ class TSPAcceleratedTrainer:
         )
         self.logger.info(
             'Epoch {:3d}: Train ({:3.0f}%) Score: {:.4f}, Greedy: {:.4f}, Teacher: {:.4f}, '
-            'Loss: {:.4f}, SCST: {:.4f}, Elite: {:.4f}, Tchr: {:.4f}, Replay[{}]'.format(
+            'Loss: {:.4f}, SCST: {:.4f}, Elite: {:.4f}, Tchr: {:.4f}, TchrW: {:.4g}, Replay[{}]'.format(
                 epoch,
                 100. * episode / train_num_episode,
                 score_AM.avg,
@@ -510,6 +548,7 @@ class TSPAcceleratedTrainer:
                 scst_loss_AM.avg,
                 elite_loss_AM.avg,
                 teacher_loss_AM.avg,
+                teacher_loss_weight,
                 replay_summary,
             )
         )
@@ -734,7 +773,7 @@ class TSPAcceleratedTrainer:
         teacher_score = -teacher_reward.float().mean()
         return teacher_loss, teacher_score
 
-    def _train_one_batch(self, batch_size, problem_size):
+    def _train_one_batch(self, batch_size, problem_size, teacher_loss_weight):
         self.global_batch_step += 1
         env = self._build_env(problem_size)
         self._prepare_train_batch(env, batch_size)
@@ -774,7 +813,7 @@ class TSPAcceleratedTrainer:
             sampled_reward.max(dim=1).values,
             greedy_reward.max(dim=1).values,
         ).float().mean()
-        if self.trainer_params['teacher_loss_weight'] > 0:
+        if teacher_loss_weight > 0:
             teacher_actions, teacher_source_reward = self._build_teacher_actions(
                 problems=env.problems,
                 sampled_reward=sampled_reward,
@@ -791,7 +830,7 @@ class TSPAcceleratedTrainer:
         total_loss = (
             self.trainer_params['scst_loss_weight'] * scst_loss +
             self.trainer_params['elite_loss_weight'] * elite_loss +
-            self.trainer_params['teacher_loss_weight'] * teacher_loss
+            teacher_loss_weight * teacher_loss
         )
 
         self.optimizer.zero_grad(set_to_none=True)

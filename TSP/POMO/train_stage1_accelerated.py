@@ -50,8 +50,9 @@ DEFAULT_SCST_LOSS_WEIGHT = 1.0
 DEFAULT_ELITE_LOSS_WEIGHT = 0.25
 DEFAULT_ELITE_TOPK = 8
 DEFAULT_TEACHER_LOSS_WEIGHT = 0.5
+DEFAULT_TEACHER_LOSS_WEIGHT_STAGE_SCHEDULE = None
 DEFAULT_TEACHER_USE_2OPT = True
-DEFAULT_TWO_OPT_TEACHER_MAX_ITERATIONS = 8
+DEFAULT_TWO_OPT_TEACHER_MAX_ITERATIONS = 4
 DEFAULT_MAX_GRAD_NORM = 1.0
 
 
@@ -81,6 +82,51 @@ def parse_batch_schedule(schedule_text):
             continue
         problem_size_text, batch_size_text = item.split(':')
         schedule[int(problem_size_text)] = int(batch_size_text)
+    return schedule
+
+
+def parse_stage_weight_schedule(schedule_text, arg_name):
+    if schedule_text is None:
+        return None
+
+    schedule_text = schedule_text.strip()
+    if not schedule_text:
+        return None
+
+    schedule = []
+    for item in schedule_text.split(','):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            start_epoch_text, weight_text = item.split(':', 1)
+            start_epoch = int(start_epoch_text)
+            weight = float(weight_text)
+        except ValueError as exc:
+            raise ValueError(
+                '{} must be formatted as "local_epoch:weight,..."'.format(arg_name)
+            ) from exc
+
+        if start_epoch <= 0:
+            raise ValueError('{} local epochs must be positive integers.'.format(arg_name))
+        if weight < 0:
+            raise ValueError('{} weights must be non-negative.'.format(arg_name))
+        schedule.append((start_epoch, weight))
+
+    if not schedule:
+        return None
+
+    schedule.sort(key=lambda item: item[0])
+    if schedule[0][0] != 1:
+        raise ValueError('{} must start at local epoch 1.'.format(arg_name))
+
+    for idx in range(1, len(schedule)):
+        if schedule[idx][0] == schedule[idx - 1][0]:
+            raise ValueError('{} contains duplicate local epoch {}.'.format(
+                arg_name,
+                schedule[idx][0],
+            ))
+
     return schedule
 
 
@@ -172,7 +218,14 @@ def build_parser():
     parser.add_argument('--elite_topk', type=int, default=DEFAULT_ELITE_TOPK,
                         help='Top-k sampled tours per instance used by the elite imitation loss.')
     parser.add_argument('--teacher_loss_weight', type=float, default=DEFAULT_TEACHER_LOSS_WEIGHT,
-                        help='Weight applied to the teacher imitation loss.')
+                        help='Fallback weight applied to the teacher imitation loss.')
+    parser.add_argument('--teacher_loss_weight_stage_schedule',
+                        default=DEFAULT_TEACHER_LOSS_WEIGHT_STAGE_SCHEDULE,
+                        help=(
+                            'Optional stage-relative teacher loss schedule formatted as '
+                            '"local_epoch:weight,...". Resets at the start of each curriculum stage '
+                            'and overrides --teacher_loss_weight when provided.'
+                        ))
     parser.add_argument('--teacher_use_2opt', type=str2bool, default=DEFAULT_TEACHER_USE_2OPT,
                         help='Improve the best sampled/greedy tour with first-improvement 2-opt before imitation.')
     parser.add_argument('--two_opt_teacher_max_iterations', type=int,
@@ -231,7 +284,8 @@ def build_optimizer_params(args):
     }
 
 
-def build_trainer_params(args, curriculum_problem_sizes, curriculum_stage_epochs):
+def build_trainer_params(args, curriculum_problem_sizes, curriculum_stage_epochs,
+                         teacher_loss_weight_stage_schedule):
     init_checkpoint = None if args.init_checkpoint is None else os.path.abspath(args.init_checkpoint)
     resume_checkpoint = None if args.resume_checkpoint is None else os.path.abspath(args.resume_checkpoint)
     return {
@@ -248,6 +302,7 @@ def build_trainer_params(args, curriculum_problem_sizes, curriculum_stage_epochs
         'elite_loss_weight': args.elite_loss_weight,
         'elite_topk': args.elite_topk,
         'teacher_loss_weight': args.teacher_loss_weight,
+        'teacher_loss_weight_stage_schedule': teacher_loss_weight_stage_schedule,
         'teacher_use_2opt': args.teacher_use_2opt,
         'two_opt_teacher_max_iterations': args.two_opt_teacher_max_iterations,
         'max_grad_norm': args.max_grad_norm,
@@ -307,18 +362,31 @@ def build_logger_params(args, curriculum_problem_sizes):
 
 def main():
     args = build_parser().parse_args()
+    teacher_loss_weight_stage_schedule = parse_stage_weight_schedule(
+        args.teacher_loss_weight_stage_schedule,
+        '--teacher_loss_weight_stage_schedule',
+    )
+    if teacher_loss_weight_stage_schedule is None:
+        teacher_loss_weight_is_active = args.teacher_loss_weight > 0
+    else:
+        teacher_loss_weight_is_active = any(
+            weight > 0 for _, weight in teacher_loss_weight_stage_schedule
+        )
+
     if args.init_checkpoint is not None and args.resume_checkpoint is not None:
         raise ValueError('--init_checkpoint and --resume_checkpoint are mutually exclusive.')
     if args.scst_loss_weight < 0 or args.elite_loss_weight < 0 or args.teacher_loss_weight < 0:
         raise ValueError('All loss weights must be non-negative.')
-    if args.scst_loss_weight == 0 and args.elite_loss_weight == 0 and args.teacher_loss_weight == 0:
+    if args.scst_loss_weight == 0 and args.elite_loss_weight == 0 and not teacher_loss_weight_is_active:
         raise ValueError('At least one training loss weight must be positive.')
     if args.elite_topk <= 0:
         raise ValueError('--elite_topk must be positive.')
     if args.two_opt_teacher_max_iterations < 0:
         raise ValueError('--two_opt_teacher_max_iterations must be non-negative.')
-    if args.teacher_use_2opt and args.teacher_loss_weight <= 0:
-        raise ValueError('--teacher_use_2opt=true requires --teacher_loss_weight > 0.')
+    if args.teacher_use_2opt and not teacher_loss_weight_is_active:
+        raise ValueError(
+            '--teacher_use_2opt=true requires a positive teacher loss weight or schedule entry.'
+        )
 
     if args.debug:
         args.epochs = 2
@@ -353,7 +421,12 @@ def main():
 
     model_params = build_model_params()
     optimizer_params = build_optimizer_params(args)
-    trainer_params = build_trainer_params(args, curriculum_problem_sizes, curriculum_stage_epochs)
+    trainer_params = build_trainer_params(
+        args,
+        curriculum_problem_sizes,
+        curriculum_stage_epochs,
+        teacher_loss_weight_stage_schedule,
+    )
     logger_params = build_logger_params(args, curriculum_problem_sizes)
 
     create_logger(**logger_params)
