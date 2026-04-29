@@ -54,12 +54,24 @@ class TSPAcceleratedTrainer:
         )
         self.logger.info('Number of parameters: %.2fM' % (total_params / 1e6))
         self.logger.info(
-            'Loss weights: scst={}, elite={}, teacher_fallback={}.'.format(
+            'Loss weights: scst={}, ppo={}, elite={}, teacher_fallback={}.'.format(
                 self.trainer_params['scst_loss_weight'],
+                self.trainer_params.get('ppo_loss_weight', 0.0),
                 self.trainer_params['elite_loss_weight'],
                 self.trainer_params['teacher_loss_weight'],
             )
         )
+        if self.trainer_params.get('ppo_loss_weight', 0.0) > 0:
+            self.logger.info(
+                'PPO config: clip_epsilon={}, update_epochs={}.'.format(
+                    self.trainer_params.get('ppo_clip_epsilon', 0.2),
+                    self.trainer_params.get('ppo_update_epochs', 1),
+                )
+            )
+            if self.trainer_params['scst_loss_weight'] > 0:
+                self.logger.warning(
+                    'Both SCST and PPO policy losses are enabled. Set scst_loss_weight=0 to replace SCST with PPO.'
+                )
         teacher_schedule = self.trainer_params.get('teacher_loss_weight_stage_schedule')
         if teacher_schedule:
             self.logger.info(
@@ -340,6 +352,7 @@ class TSPAcceleratedTrainer:
                 train_teacher_score,
                 train_loss,
                 train_scst_loss,
+                train_ppo_loss,
                 train_elite_loss,
                 train_teacher_loss,
             ) = self._train_one_epoch(epoch, stage_info, effective_teacher_loss_weight)
@@ -349,6 +362,7 @@ class TSPAcceleratedTrainer:
             self.result_log.append('train_teacher_score', epoch, train_teacher_score)
             self.result_log.append('train_loss', epoch, train_loss)
             self.result_log.append('train_scst_loss', epoch, train_scst_loss)
+            self.result_log.append('train_ppo_loss', epoch, train_ppo_loss)
             self.result_log.append('train_elite_loss', epoch, train_elite_loss)
             self.result_log.append('train_teacher_loss', epoch, train_teacher_loss)
             self.result_log.append('train_problem_size', epoch, problem_size)
@@ -387,6 +401,7 @@ class TSPAcceleratedTrainer:
                     labels=[
                         'train_loss',
                         'train_scst_loss',
+                        'train_ppo_loss',
                         'train_elite_loss',
                         'train_teacher_loss',
                     ],
@@ -416,6 +431,9 @@ class TSPAcceleratedTrainer:
                         'train_batch_size_by_problem_size': self.trainer_params.get('train_batch_size_by_problem_size'),
                         'min_train_batch_size': self.trainer_params['min_train_batch_size'],
                         'scst_loss_weight': self.trainer_params['scst_loss_weight'],
+                        'ppo_loss_weight': self.trainer_params.get('ppo_loss_weight', 0.0),
+                        'ppo_clip_epsilon': self.trainer_params.get('ppo_clip_epsilon', 0.2),
+                        'ppo_update_epochs': self.trainer_params.get('ppo_update_epochs', 1),
                         'elite_loss_weight': self.trainer_params['elite_loss_weight'],
                         'elite_topk': self.trainer_params['elite_topk'],
                         'teacher_loss_weight': self.trainer_params['teacher_loss_weight'],
@@ -445,6 +463,7 @@ class TSPAcceleratedTrainer:
                     labels=[
                         'train_loss',
                         'train_scst_loss',
+                        'train_ppo_loss',
                         'train_elite_loss',
                         'train_teacher_loss',
                     ],
@@ -461,6 +480,7 @@ class TSPAcceleratedTrainer:
         teacher_score_AM = AverageMeter()
         loss_AM = AverageMeter()
         scst_loss_AM = AverageMeter()
+        ppo_loss_AM = AverageMeter()
         elite_loss_AM = AverageMeter()
         teacher_loss_AM = AverageMeter()
 
@@ -484,6 +504,7 @@ class TSPAcceleratedTrainer:
                     avg_teacher_score,
                     avg_loss,
                     avg_scst_loss,
+                    avg_ppo_loss,
                     avg_elite_loss,
                     avg_teacher_loss,
                 ) = self._train_one_batch(
@@ -500,6 +521,7 @@ class TSPAcceleratedTrainer:
             teacher_score_AM.update(avg_teacher_score, current_batch_size)
             loss_AM.update(avg_loss, current_batch_size)
             scst_loss_AM.update(avg_scst_loss, current_batch_size)
+            ppo_loss_AM.update(avg_ppo_loss, current_batch_size)
             elite_loss_AM.update(avg_elite_loss, current_batch_size)
             teacher_loss_AM.update(avg_teacher_loss, current_batch_size)
             episode_done_by_size[problem_size] += current_batch_size
@@ -510,7 +532,7 @@ class TSPAcceleratedTrainer:
                 if loop_cnt <= 10:
                     self.logger.info(
                         'Epoch {:3d}: Train {:3d}/{:3d}({:1.1f}%) size={} Score: {:.4f}, Greedy: {:.4f}, '
-                        'Teacher: {:.4f}, Loss: {:.4f}, SCST: {:.4f}, Elite: {:.4f}, '
+                        'Teacher: {:.4f}, Loss: {:.4f}, SCST: {:.4f}, PPO: {:.4f}, Elite: {:.4f}, '
                         'Tchr: {:.4f}, TchrW: {:.4g}'.format(
                             epoch,
                             episode,
@@ -522,6 +544,7 @@ class TSPAcceleratedTrainer:
                             teacher_score_AM.avg,
                             loss_AM.avg,
                             scst_loss_AM.avg,
+                            ppo_loss_AM.avg,
                             elite_loss_AM.avg,
                             teacher_loss_AM.avg,
                             teacher_loss_weight,
@@ -538,7 +561,8 @@ class TSPAcceleratedTrainer:
         )
         self.logger.info(
             'Epoch {:3d}: Train ({:3.0f}%) Score: {:.4f}, Greedy: {:.4f}, Teacher: {:.4f}, '
-            'Loss: {:.4f}, SCST: {:.4f}, Elite: {:.4f}, Tchr: {:.4f}, TchrW: {:.4g}, Replay[{}]'.format(
+            'Loss: {:.4f}, SCST: {:.4f}, PPO: {:.4f}, Elite: {:.4f}, Tchr: {:.4f}, '
+            'TchrW: {:.4g}, Replay[{}]'.format(
                 epoch,
                 100. * episode / train_num_episode,
                 score_AM.avg,
@@ -546,6 +570,7 @@ class TSPAcceleratedTrainer:
                 teacher_score_AM.avg,
                 loss_AM.avg,
                 scst_loss_AM.avg,
+                ppo_loss_AM.avg,
                 elite_loss_AM.avg,
                 teacher_loss_AM.avg,
                 teacher_loss_weight,
@@ -559,6 +584,7 @@ class TSPAcceleratedTrainer:
             teacher_score_AM.avg,
             loss_AM.avg,
             scst_loss_AM.avg,
+            ppo_loss_AM.avg,
             elite_loss_AM.avg,
             teacher_loss_AM.avg,
         )
@@ -630,11 +656,36 @@ class TSPAcceleratedTrainer:
     def _gather(values, index):
         return values.gather(dim=1, index=index)
 
-    def _compute_scst_loss(self, reward, greedy_reward, sampled_log_prob):
+    @staticmethod
+    def _log_prob_from_prob_list(prob_list):
+        return prob_list.clamp_min(1e-12).log().sum(dim=2)
+
+    @staticmethod
+    def _zero_like_log_prob(log_prob):
+        return log_prob.sum() * 0.0
+
+    def _compute_normalized_advantage(self, reward, greedy_reward):
         advantage = reward - greedy_reward
         advantage_scale = advantage.std(dim=1, keepdim=True, unbiased=False).clamp_min(1e-6)
-        normalized_advantage = (advantage / advantage_scale).clamp(min=-10.0, max=10.0)
+        return (advantage / advantage_scale).clamp(min=-10.0, max=10.0)
+
+    def _compute_scst_loss(self, reward, greedy_reward, sampled_log_prob):
+        normalized_advantage = self._compute_normalized_advantage(reward, greedy_reward)
+        return self._compute_scst_loss_from_advantage(normalized_advantage, sampled_log_prob)
+
+    @staticmethod
+    def _compute_scst_loss_from_advantage(normalized_advantage, sampled_log_prob):
         return -(normalized_advantage.detach() * sampled_log_prob).mean()
+
+    def _compute_ppo_loss(self, new_log_prob, old_log_prob, normalized_advantage):
+        clip_epsilon = self.trainer_params.get('ppo_clip_epsilon', 0.2)
+        log_ratio = (new_log_prob - old_log_prob.detach()).clamp(min=-20.0, max=20.0)
+        ratio = log_ratio.exp()
+        clipped_ratio = ratio.clamp(1.0 - clip_epsilon, 1.0 + clip_epsilon)
+        advantage = normalized_advantage.detach()
+        unclipped_objective = ratio * advantage
+        clipped_objective = clipped_ratio * advantage
+        return -torch.minimum(unclipped_objective, clipped_objective).mean()
 
     def _compute_elite_loss(self, reward, sampled_log_prob):
         elite_k = max(1, min(int(self.trainer_params['elite_topk']), reward.size(1)))
@@ -773,8 +824,31 @@ class TSPAcceleratedTrainer:
         teacher_score = -teacher_reward.float().mean()
         return teacher_loss, teacher_score
 
-    def _train_one_batch(self, batch_size, problem_size, teacher_loss_weight):
+    def _step_optimizer(self, total_loss):
         self.global_batch_step += 1
+        self.optimizer.zero_grad(set_to_none=True)
+        total_loss.backward()
+
+        max_grad_norm = self.trainer_params['max_grad_norm']
+        if max_grad_norm is not None and max_grad_norm > 0:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_grad_norm)
+
+        self.optimizer.step()
+
+    def _train_one_batch(self, batch_size, problem_size, teacher_loss_weight):
+        if self.trainer_params.get('ppo_loss_weight', 0.0) > 0:
+            return self._train_one_batch_ppo(
+                batch_size=batch_size,
+                problem_size=problem_size,
+                teacher_loss_weight=teacher_loss_weight,
+            )
+        return self._train_one_batch_scst(
+            batch_size=batch_size,
+            problem_size=problem_size,
+            teacher_loss_weight=teacher_loss_weight,
+        )
+
+    def _train_one_batch_scst(self, batch_size, problem_size, teacher_loss_weight):
         env = self._build_env(problem_size)
         self._prepare_train_batch(env, batch_size)
 
@@ -784,7 +858,7 @@ class TSPAcceleratedTrainer:
             no_grad=False,
             eval_type='softmax',
         )
-        sampled_log_prob = sampled_prob_list.clamp_min(1e-12).log().sum(dim=2)
+        sampled_log_prob = self._log_prob_from_prob_list(sampled_prob_list)
 
         greedy_reward, _, greedy_actions = self._rollout(
             env,
@@ -800,15 +874,16 @@ class TSPAcceleratedTrainer:
                 greedy_reward=greedy_reward,
                 sampled_log_prob=sampled_log_prob,
             )
+        ppo_loss = self._zero_like_log_prob(sampled_log_prob)
 
-        elite_loss = sampled_log_prob.sum() * 0.0
+        elite_loss = self._zero_like_log_prob(sampled_log_prob)
         if self.trainer_params['elite_loss_weight'] > 0:
             elite_loss = self._compute_elite_loss(
                 reward=sampled_reward,
                 sampled_log_prob=sampled_log_prob,
             )
 
-        teacher_loss = sampled_log_prob.sum() * 0.0
+        teacher_loss = self._zero_like_log_prob(sampled_log_prob)
         teacher_score = -torch.maximum(
             sampled_reward.max(dim=1).values,
             greedy_reward.max(dim=1).values,
@@ -829,18 +904,12 @@ class TSPAcceleratedTrainer:
 
         total_loss = (
             self.trainer_params['scst_loss_weight'] * scst_loss +
+            self.trainer_params.get('ppo_loss_weight', 0.0) * ppo_loss +
             self.trainer_params['elite_loss_weight'] * elite_loss +
             teacher_loss_weight * teacher_loss
         )
 
-        self.optimizer.zero_grad(set_to_none=True)
-        total_loss.backward()
-
-        max_grad_norm = self.trainer_params['max_grad_norm']
-        if max_grad_norm is not None and max_grad_norm > 0:
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_grad_norm)
-
-        self.optimizer.step()
+        self._step_optimizer(total_loss)
 
         sampled_best_reward = sampled_reward.max(dim=1).values
         greedy_best_reward = greedy_reward.max(dim=1).values
@@ -853,6 +922,129 @@ class TSPAcceleratedTrainer:
             teacher_score.item(),
             total_loss.item(),
             scst_loss.item(),
+            ppo_loss.item(),
             elite_loss.item(),
             teacher_loss.item(),
+        )
+
+    def _train_one_batch_ppo(self, batch_size, problem_size, teacher_loss_weight):
+        env = self._build_env(problem_size)
+        self._prepare_train_batch(env, batch_size)
+
+        sampled_reward, sampled_prob_list, sampled_actions = self._rollout(
+            env,
+            collect_prob=True,
+            no_grad=True,
+            eval_type='softmax',
+        )
+        sampled_actions = sampled_actions.detach()
+        sampled_reward = sampled_reward.detach()
+        old_sampled_log_prob = self._log_prob_from_prob_list(sampled_prob_list).detach()
+
+        greedy_reward, _, greedy_actions = self._rollout(
+            env,
+            collect_prob=False,
+            no_grad=True,
+            eval_type='argmax',
+        )
+        greedy_reward = greedy_reward.detach()
+        greedy_actions = greedy_actions.detach()
+        normalized_advantage = self._compute_normalized_advantage(
+            reward=sampled_reward,
+            greedy_reward=greedy_reward,
+        ).detach()
+
+        teacher_actions = None
+        teacher_source_reward = None
+        teacher_score = -torch.maximum(
+            sampled_reward.max(dim=1).values,
+            greedy_reward.max(dim=1).values,
+        ).float().mean()
+        if teacher_loss_weight > 0:
+            teacher_actions, teacher_source_reward = self._build_teacher_actions(
+                problems=env.problems,
+                sampled_reward=sampled_reward,
+                sampled_actions=sampled_actions,
+                greedy_reward=greedy_reward,
+                greedy_actions=greedy_actions,
+            )
+
+        update_epochs = int(self.trainer_params.get('ppo_update_epochs', 1))
+        loss_sum = 0.0
+        scst_loss_sum = 0.0
+        ppo_loss_sum = 0.0
+        elite_loss_sum = 0.0
+        teacher_loss_sum = 0.0
+
+        for _ in range(update_epochs):
+            policy_env = self._build_env_from_problems(
+                problems=env.problems,
+                pomo_size=sampled_actions.size(1),
+            )
+            _, current_prob_list, _ = self._rollout(
+                policy_env,
+                collect_prob=True,
+                no_grad=False,
+                forced_actions=sampled_actions,
+                eval_type='softmax',
+            )
+            current_log_prob = self._log_prob_from_prob_list(current_prob_list)
+
+            scst_loss = self._zero_like_log_prob(current_log_prob)
+            if self.trainer_params['scst_loss_weight'] > 0:
+                scst_loss = self._compute_scst_loss_from_advantage(
+                    normalized_advantage,
+                    current_log_prob,
+                )
+
+            ppo_loss = self._compute_ppo_loss(
+                new_log_prob=current_log_prob,
+                old_log_prob=old_sampled_log_prob,
+                normalized_advantage=normalized_advantage,
+            )
+
+            elite_loss = self._zero_like_log_prob(current_log_prob)
+            if self.trainer_params['elite_loss_weight'] > 0:
+                elite_loss = self._compute_elite_loss(
+                    reward=sampled_reward,
+                    sampled_log_prob=current_log_prob,
+                )
+
+            teacher_loss = self._zero_like_log_prob(current_log_prob)
+            if teacher_loss_weight > 0:
+                teacher_loss, teacher_score = self._compute_teacher_loss(
+                    problems=env.problems,
+                    teacher_actions=teacher_actions,
+                    teacher_source_reward=teacher_source_reward,
+                )
+
+            total_loss = (
+                self.trainer_params['scst_loss_weight'] * scst_loss +
+                self.trainer_params.get('ppo_loss_weight', 0.0) * ppo_loss +
+                self.trainer_params['elite_loss_weight'] * elite_loss +
+                teacher_loss_weight * teacher_loss
+            )
+
+            self._step_optimizer(total_loss)
+            loss_sum += total_loss.item()
+            scst_loss_sum += scst_loss.item()
+            ppo_loss_sum += ppo_loss.item()
+            elite_loss_sum += elite_loss.item()
+            teacher_loss_sum += teacher_loss.item()
+
+        sampled_best_reward = sampled_reward.max(dim=1).values
+        greedy_best_reward = greedy_reward.max(dim=1).values
+        score_mean = -sampled_best_reward.float().mean()
+        greedy_score_mean = -greedy_best_reward.float().mean()
+        update_count = float(update_epochs)
+
+        return (
+            score_mean.item(),
+            greedy_score_mean.item(),
+            teacher_score.item(),
+            loss_sum / update_count,
+            scst_loss_sum / update_count,
+            ppo_loss_sum / update_count,
+            elite_loss_sum / update_count,
+            teacher_loss_sum / update_count,
         )

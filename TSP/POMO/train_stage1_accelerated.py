@@ -47,6 +47,9 @@ DEFAULT_WEIGHT_DECAY = 1e-6
 DEFAULT_MILESTONES = [800, 1000]
 DEFAULT_SCHEDULER_GAMMA = 0.2
 DEFAULT_SCST_LOSS_WEIGHT = 1.0
+DEFAULT_PPO_LOSS_WEIGHT = 0.0
+DEFAULT_PPO_CLIP_EPSILON = 0.2
+DEFAULT_PPO_UPDATE_EPOCHS = 1
 DEFAULT_ELITE_LOSS_WEIGHT = 0.25
 DEFAULT_ELITE_TOPK = 8
 DEFAULT_TEACHER_LOSS_WEIGHT = 0.5
@@ -213,6 +216,12 @@ def build_parser():
                         help='LR decay factor for MultiStepLR.')
     parser.add_argument('--scst_loss_weight', type=float, default=DEFAULT_SCST_LOSS_WEIGHT,
                         help='Weight applied to the self-critical policy-gradient loss.')
+    parser.add_argument('--ppo_loss_weight', type=float, default=DEFAULT_PPO_LOSS_WEIGHT,
+                        help='Weight applied to the PPO clipped policy-gradient loss.')
+    parser.add_argument('--ppo_clip_epsilon', type=float, default=DEFAULT_PPO_CLIP_EPSILON,
+                        help='PPO probability-ratio clipping epsilon.')
+    parser.add_argument('--ppo_update_epochs', type=int, default=DEFAULT_PPO_UPDATE_EPOCHS,
+                        help='Number of PPO update passes over each sampled batch.')
     parser.add_argument('--elite_loss_weight', type=float, default=DEFAULT_ELITE_LOSS_WEIGHT,
                         help='Weight applied to the elite self-imitation loss.')
     parser.add_argument('--elite_topk', type=int, default=DEFAULT_ELITE_TOPK,
@@ -299,6 +308,9 @@ def build_trainer_params(args, curriculum_problem_sizes, curriculum_stage_epochs
         'train_batch_size_by_problem_size': parse_batch_schedule(args.batch_schedule),
         'pomo_size_override': args.pomo_size,
         'scst_loss_weight': args.scst_loss_weight,
+        'ppo_loss_weight': args.ppo_loss_weight,
+        'ppo_clip_epsilon': args.ppo_clip_epsilon,
+        'ppo_update_epochs': args.ppo_update_epochs,
         'elite_loss_weight': args.elite_loss_weight,
         'elite_topk': args.elite_topk,
         'teacher_loss_weight': args.teacher_loss_weight,
@@ -375,10 +387,24 @@ def main():
 
     if args.init_checkpoint is not None and args.resume_checkpoint is not None:
         raise ValueError('--init_checkpoint and --resume_checkpoint are mutually exclusive.')
-    if args.scst_loss_weight < 0 or args.elite_loss_weight < 0 or args.teacher_loss_weight < 0:
+    if (
+        args.scst_loss_weight < 0 or
+        args.ppo_loss_weight < 0 or
+        args.elite_loss_weight < 0 or
+        args.teacher_loss_weight < 0
+    ):
         raise ValueError('All loss weights must be non-negative.')
-    if args.scst_loss_weight == 0 and args.elite_loss_weight == 0 and not teacher_loss_weight_is_active:
+    if (
+        args.scst_loss_weight == 0 and
+        args.ppo_loss_weight == 0 and
+        args.elite_loss_weight == 0 and
+        not teacher_loss_weight_is_active
+    ):
         raise ValueError('At least one training loss weight must be positive.')
+    if args.ppo_clip_epsilon <= 0:
+        raise ValueError('--ppo_clip_epsilon must be positive.')
+    if args.ppo_update_epochs <= 0:
+        raise ValueError('--ppo_update_epochs must be positive.')
     if args.elite_topk <= 0:
         raise ValueError('--elite_topk must be positive.')
     if args.two_opt_teacher_max_iterations < 0:

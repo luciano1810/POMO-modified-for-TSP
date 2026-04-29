@@ -170,9 +170,19 @@ python train_stage1_accelerated.py \
 这套第一阶段训练在原始 POMO 多起点 rollout 上额外加入了三种信号：
 
 - `greedy baseline` 的 self-critical policy gradient，用当前模型的 argmax rollout 降低方差
+- 可选 `PPO clipped policy-gradient`，用旧策略采样的 tour 做 forced-action 重新评估，并用 probability ratio clipping 控制更新幅度
 - `elite top-k` self-imitation，把同一实例里最短的 sampled tours 重新加权利用起来
 - `best-of(sampled, greedy) + optional 2-opt` teacher distillation，把更强的局部搜索路径直接蒸馏回策略
 - `teacher_loss_weight_stage_schedule` 是 stage 内相对 epoch schedule；每进入一个新的 curriculum problem size，都会从 local epoch 1 重新套用这组 teacher 权重
+
+如果要用 PPO 替代 SCST，把 `scst_loss_weight` 关掉并打开 PPO：
+
+```bash
+  --scst_loss_weight 0.0 \
+  --ppo_loss_weight 1.0 \
+  --ppo_clip_epsilon 0.2 \
+  --ppo_update_epochs 2
+```
 
 同时也支持和 post-training 一样的 curriculum + mixed replay：当前阶段主训、上一阶段回放、基础规模回放。这样第一阶段就不再只盯着 `TSP100`，而是可以直接做 `100 -> 150 -> 200 -> 250 -> 300` 的渐进训练。
 
